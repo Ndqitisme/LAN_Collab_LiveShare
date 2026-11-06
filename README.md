@@ -39,7 +39,8 @@ Hub là một tiến trình Node.js không phụ thuộc thư viện ngoài. Hub
   - chế độ đi theo màn hình của một thành viên.
 - **Chat tích hợp:**
   - nhắc tên bằng `@tên`, có thông báo cho người được nhắc;
-  - tham chiếu `file:dòng` có thể bấm để mở file;
+  - tham chiếu `file:dòng` có thể bấm để mở file, liên kết web mở bằng trình duyệt;
+  - gửi ảnh (dán bằng Ctrl+V hoặc chọn file), bảng chọn emoji, định dạng `code` và khối ```code```;
   - đếm tin chưa đọc;
   - lịch sử chat lưu trên hub.
 - **Định danh bằng tài khoản VS Code.** Dùng tài khoản GitHub hoặc Microsoft đã đăng nhập sẵn trong VS Code làm tên hiển thị. Hub có thể giới hạn danh sách tài khoản được vào phòng.
@@ -169,7 +170,7 @@ WantedBy=multi-user.target
 | `hub/token-<PROJECT>.txt` | Token, do script khởi động tạo một lần. Xoá tệp này để đổi token; mọi mã mời cũ sẽ hết hiệu lực |
 | `hub/allowed-accounts-<PROJECT>.txt` | Danh sách tài khoản được vào phòng (xem [Bảo mật](#bảo-mật)) |
 | `<root>/.lan-collab/hub.json` | Mã định danh của bản chung. Không xoá: máy khách dùng mã này để nhận ra đúng hub |
-| `<root>/.lan-collab/history/` | Ảnh chụp từng file, tối đa 10 phút một lần, cùng bản trước mỗi lần xoá hoặc ghi đè; `chat.jsonl` là lịch sử chat |
+| `<root>/.lan-collab/history/` | Ảnh chụp từng file, tối đa 10 phút một lần, cùng bản trước mỗi lần xoá hoặc ghi đè; `chat.jsonl` là lịch sử chat, `chat-media/` chứa ảnh gửi trong chat |
 
 Thư mục `.lan-collab` không bao giờ được đồng bộ sang máy khách.
 
@@ -180,7 +181,7 @@ Lấy file `lan-collab-<version>.vsix` từ trang Releases của repository, ho�
 Cài vào VS Code bằng một trong hai cách:
 
 ```bash
-code --install-extension dist/lan-collab-0.1.0.vsix
+code --install-extension dist/lan-collab-0.1.1.vsix
 ```
 
 hoặc trong VS Code: **Extensions** → `···` → **Install from VSIX…**
@@ -227,8 +228,8 @@ Một bản phát hành gồm hai file, cùng được tạo trong thư mục `d
 
    Ví dụ kết quả của `npm run package:all`:
    ```
-   DONE  Packaged: dist\lan-collab-0.1.0.vsix (14 files, 109 KB)
-   Created dist\lan-collab-hub-0.1.0.zip (8 files)
+   DONE  Packaged: dist\lan-collab-0.1.1.vsix (16 files, 124 KB)
+   Created dist\lan-collab-hub-0.1.1.zip (8 files)
    ```
 4. Kiểm tra nhanh:
    - extension: `code --install-extension dist/lan-collab-<version>.vsix`, rồi mở lại cửa sổ VS Code và xác nhận biểu tượng LAN Collab xuất hiện;
@@ -240,8 +241,8 @@ Một bản phát hành gồm hai file, cùng được tạo trong thư mục `d
 2. Chạy `npm run package:all`.
 3. Tạo tag và đẩy lên:
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
 4. Trên GitHub: **Releases** → **Draft a new release**, chọn tag vừa tạo, đính kèm hai file trong `dist/`, ghi tóm tắt thay đổi, rồi bấm **Publish release**.
 
@@ -299,7 +300,7 @@ Hộp thoại không hiện nếu lần kết nối đó chỉ tải file về t
 |---|---|
 | Thanh trạng thái | Số người trong phòng, số tin chưa đọc, trạng thái kết nối. Bấm vào để mở menu |
 | Mục **Đồng đội** | Mỗi thành viên kèm `file:dòng`, phiên debug và trạng thái. Bấm tên để nhảy tới vị trí của người đó; rê chuột để xem tài khoản. Mục **Hoạt động gần đây** là nhật ký của phòng |
-| Mục **Chat** | Enter để gửi, Shift+Enter để xuống dòng. Nút `@tên` chèn lời nhắc; `@all` nhắc cả phòng. Nút **Vị trí** chèn `file:dòng` của editor đang mở. Mọi chuỗi dạng `đường/dẫn.ext:dòng` đều mở được bằng cách bấm vào |
+| Mục **Chat** | Enter để gửi, Shift+Enter để xuống dòng. Gõ `@` để chọn người cần nhắc; `@all` nhắc cả phòng. Các nút dưới ô nhập: emoji, gửi ảnh, chèn `file:dòng` của editor đang mở. Ảnh có thể dán thẳng bằng Ctrl+V; ảnh lớn được thu nhỏ còn cạnh dài 1920 px trước khi gửi, giới hạn 4 MB. Bấm vào ảnh để mở bằng trình xem ảnh của VS Code. Mọi chuỗi dạng `đường/dẫn.ext:dòng` đều mở được bằng cách bấm vào |
 | Trong editor | Con trỏ và vùng chọn của người khác theo màu riêng, tên hiển thị ở cuối dòng |
 
 ### Lệnh
@@ -369,6 +370,8 @@ Các thao tác thay đổi nhiều file như `git checkout`, `git pull`, `git st
   - vị trí con trỏ;
   - trạng thái và tin nhắn chat.
 - **An toàn của panel chat.** Tin nhắn được hiển thị dưới dạng văn bản thuần, không được diễn giải như HTML.
+- **Kiểm tra đường dẫn.** Hub và extension đều từ chối đường dẫn ra ngoài thư mục dự án, cũng như các cách viết khác của cùng một tên trên Windows (tên ngắn 8.3 như `GIT~1`, tên kết thúc bằng dấu chấm hoặc khoảng trắng, `tên:luồng`, tên thiết bị như `CON`, `NUL`). Extension không nhận thay đổi từ hub cho các file mà máy đó loại trừ.
+- **Kết nối chưa đăng nhập.** Hub đóng kết nối không gửi lời chào hợp lệ trong 15 giây, hoặc gửi một thông điệp lớn hơn 64 KB trước khi đăng nhập.
 
 ## Giới hạn đã biết
 
@@ -376,6 +379,8 @@ Các thao tác thay đổi nhiều file như `git checkout`, `git pull`, `git st
 - Mỗi cửa sổ VS Code chỉ đồng bộ thư mục gốc đầu tiên của workspace.
 - Hub ghi thay đổi xuống đĩa sau mỗi 0,5 giây. Nếu máy chủ mất điện đột ngột, thay đổi trong khoảng thời gian đó có thể bị mất. Dừng hub bằng cách thông thường thì không mất dữ liệu.
 - Giao diện extension hiện chỉ có tiếng Việt.
+- File hoặc thư mục có tên dạng tên ngắn 8.3 (ví dụ `REPORT~1.TXT`), tên kết thúc bằng dấu chấm hoặc khoảng trắng, hay trùng tên thiết bị của Windows không được đồng bộ (xem mục Bảo mật).
+- Một file lớn hơn khoảng 300 MB không truyền được qua hub, vì nội dung file được gửi trong một thông điệp duy nhất.
 
 ## Xử lý sự cố
 
@@ -405,7 +410,7 @@ npm run package:all  # đóng gói extension và hub vào dist/ (xem Đóng gói
 | `lib/editor-binding.js` | Kết nối tầng OT với editor của VS Code |
 | `lib/common.js` | Giao thức, loại trừ file, mã mời, tiện ích dùng chung |
 | `extension/extension.js` | Giao diện VS Code: con trỏ, danh sách thành viên, thanh trạng thái, tài khoản, mã mời |
-| `extension/chat-view.js` | Panel chat |
+| `extension/chat-view.js`, `extension/webview/` | Panel chat |
 | `hub/hub.js` | Hub |
 | `hub/start-hub.bat`, `hub/start-hub.sh` | Script khởi động hub |
 | `tools/package-hub.js` | Tạo file `.zip` của hub |

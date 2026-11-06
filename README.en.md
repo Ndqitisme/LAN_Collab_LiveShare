@@ -41,7 +41,8 @@ The extension user interface is currently available in Vietnamese only.
   - a follow mode that tracks one member's position.
 - **Built-in chat:**
   - `@name` mentions, with a notification for the person mentioned;
-  - clickable `file:line` references;
+  - clickable `file:line` references; web links open in the browser;
+  - images (paste with Ctrl+V or pick a file), an emoji picker, `code` and ```code``` block formatting;
   - unread counters;
   - chat history stored on the hub.
 - **VS Code account identity.** The GitHub or Microsoft account already signed in to VS Code is used as the display name. The hub can restrict which accounts may join.
@@ -171,7 +172,7 @@ WantedBy=multi-user.target
 | `hub/token-<PROJECT>.txt` | The token, generated once by the launcher. Delete it to rotate the token; all existing invite codes become invalid |
 | `hub/allowed-accounts-<PROJECT>.txt` | Accounts allowed to join (see [Security](#security)) |
 | `<root>/.lan-collab/hub.json` | Identifier of the shared copy. Do not delete it: clients use it to recognize the hub |
-| `<root>/.lan-collab/history/` | Per-file snapshots, at most one every 10 minutes, plus a copy before each delete or overwrite; `chat.jsonl` holds the chat history |
+| `<root>/.lan-collab/history/` | Per-file snapshots, at most one every 10 minutes, plus a copy before each delete or overwrite; `chat.jsonl` holds the chat history, `chat-media/` the images sent in chat |
 
 The `.lan-collab` folder is never synchronized to clients.
 
@@ -182,7 +183,7 @@ Download `lan-collab-<version>.vsix` from the repository's Releases page, or bui
 Install it in VS Code in either of two ways:
 
 ```bash
-code --install-extension dist/lan-collab-0.1.0.vsix
+code --install-extension dist/lan-collab-0.1.1.vsix
 ```
 
 or in VS Code: **Extensions** → `···` → **Install from VSIX…**
@@ -229,8 +230,8 @@ A release consists of two files, both created in `dist/`:
 
    Example output of `npm run package:all`:
    ```
-   DONE  Packaged: dist\lan-collab-0.1.0.vsix (14 files, 109 KB)
-   Created dist\lan-collab-hub-0.1.0.zip (8 files)
+   DONE  Packaged: dist\lan-collab-0.1.1.vsix (16 files, 124 KB)
+   Created dist\lan-collab-hub-0.1.1.zip (8 files)
    ```
 4. Quick check:
    - extension: `code --install-extension dist/lan-collab-<version>.vsix`, reload VS Code and confirm that the LAN Collab icon appears;
@@ -242,8 +243,8 @@ A release consists of two files, both created in `dist/`:
 2. Run `npm run package:all`.
 3. Create and push a tag:
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
 4. On GitHub: **Releases** → **Draft a new release**, select the tag, attach both files from `dist/`, describe the changes and click **Publish release**.
 
@@ -301,7 +302,7 @@ No dialog appears when the connection only downloads files into an empty folder.
 |---|---|
 | Status bar | Number of people in the room, unread messages, connection state. Click it to open the menu |
 | **Đồng đội** view | Each member with `file:line`, debug session and status. Click a name to jump to that position; hover to see the account. **Hoạt động gần đây** is the room's activity log |
-| **Chat** view | Enter sends, Shift+Enter inserts a line break. The `@name` buttons insert a mention; `@all` mentions everyone. The **Vị trí** button inserts the `file:line` of the active editor. Any `path/file.ext:line` text is clickable |
+| **Chat** view | Enter sends, Shift+Enter inserts a line break. Type `@` to pick a member to mention; `@all` mentions everyone. The buttons below the input insert an emoji, attach an image, or insert the `file:line` of the active editor. Images can be pasted with Ctrl+V; large images are scaled down to 1920 px on the long side before sending, with a 4 MB limit. Click an image to open it in the VS Code image viewer. Any `path/file.ext:line` text is clickable |
 | Editor | Other people's cursors and selections in their colors, with the name at the end of the line |
 
 ### Commands
@@ -371,6 +372,8 @@ Operations that change many files, such as `git checkout`, `git pull` or `git st
   - cursor positions;
   - status and chat messages.
 - **Chat view safety.** Chat messages are rendered as plain text and never interpreted as HTML.
+- **Path checks.** Both the hub and the extension reject paths that leave the project folder, and other Windows spellings of the same name (8.3 short names such as `GIT~1`, names ending in a dot or a space, `name:stream`, device names such as `CON` and `NUL`). The extension ignores hub changes to files that its own machine excludes.
+- **Connections that have not signed in.** The hub closes a connection that sends no valid hello within 15 s, or a message larger than 64 KB before signing in.
 
 ## Known limitations
 
@@ -378,6 +381,8 @@ Operations that change many files, such as `git checkout`, `git pull` or `git st
 - Each VS Code window synchronizes only the first root folder of the workspace.
 - The hub writes changes to disk every 0.5 s. A sudden power loss on the server can lose the changes made in that interval. A normal shutdown of the hub loses nothing.
 - The user interface is in Vietnamese only.
+- Files or folders named like 8.3 short names (for example `REPORT~1.TXT`), names ending in a dot or a space, and Windows device names are not synchronized (see Security).
+- A file larger than about 300 MB cannot pass through the hub, because a file is sent as a single message.
 
 ## Troubleshooting
 
@@ -407,7 +412,7 @@ Set the environment variable `LAN_COLLAB_DEBUG=1` before starting VS Code to mak
 | `lib/editor-binding.js` | Binding between the OT layer and the VS Code editor |
 | `lib/common.js` | Protocol framing, exclusion rules, invite codes, shared utilities |
 | `extension/extension.js` | VS Code user interface: cursors, member list, status bar, accounts, invite codes |
-| `extension/chat-view.js` | Chat view |
+| `extension/chat-view.js`, `extension/webview/` | Chat view |
 | `hub/hub.js` | The hub |
 | `hub/start-hub.bat`, `hub/start-hub.sh` | Hub launchers |
 | `tools/package-hub.js` | Builds the hub `.zip` |

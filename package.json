@@ -2,7 +2,7 @@
   "name": "lan-collab",
   "displayName": "LAN Collab",
   "description": "Chỉnh sửa cộng tác thời gian thực qua máy chủ trong mạng nội bộ, không phụ thuộc dịch vụ đám mây. Mỗi máy làm việc trên bản sao tệp cục bộ của dự án.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ndqitisme",
   "author": {
     "name": "Ndqitisme"
@@ -41,7 +41,7 @@
     "onStartupFinished"
   ],
   "scripts": {
-    "test": "node test/ot.test.js && node test/chat.test.js && node test/sync.test.js",
+    "test": "node test/ot.test.js && node test/chat.test.js && node test/exclude.test.js && node test/robustness.test.js && node test/sync.test.js",
     "test:vscode": "node test/vscode/run.js",
     "hub": "node hub/hub.js",
     "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package -o dist/",

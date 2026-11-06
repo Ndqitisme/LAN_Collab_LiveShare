@@ -2,11 +2,16 @@
 
 const vscode = require('vscode');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 // Sidebar chat. Messages come from other people, so the page only ever inserts them as text (never as HTML).
 class ChatView {
   constructor(host) {
-    // host: { core(), myName(), sendLocation() -> string|null, openRef(rel, line), onUnread(n) }
+    // host: { core(), extensionUri, sendLocation() -> string|null, openRef(rel, line), onUnread(n) }
     this.host = host;
     this.view = null;
     this.unread = 0;
@@ -14,8 +19,9 @@ class ChatView {
 
   resolveWebviewView(view) {
     this.view = view;
-    view.webview.options = { enableScripts: true };
-    view.webview.html = page(crypto.randomBytes(16).toString('base64'));
+    const root = vscode.Uri.joinPath(this.host.extensionUri, 'extension', 'webview');
+    view.webview.options = { enableScripts: true, localResourceRoots: [root] };
+    view.webview.html = page(view.webview, root, crypto.randomBytes(16).toString('base64'));
     view.webview.onDidReceiveMessage((m) => this._onMessage(m));
     view.onDidChangeVisibility(() => {
       if (view.visible) this._markRead();
@@ -29,14 +35,38 @@ class ChatView {
     const core = this.host.core();
     if (m.type === 'ready') this.refresh();
     else if (m.type === 'send') {
-      if (!core || !core.sendChat(String(m.text || ''))) vscode.window.showWarningMessage('LAN Collab: chưa kết nối hub, tin nhắn chưa gửi được.');
+      const reason = core ? core.sendChat(String(m.text || ''), validImage(m.image)) : 'Chưa kết nối hub, tin nhắn chưa gửi được.';
+      this._post({ type: 'sendResult', ok: !reason, reason });
     } else if (m.type === 'location') {
       const loc = this.host.sendLocation();
       if (loc) this._post({ type: 'insert', text: `${loc} ` });
-      else vscode.window.showInformationMessage('Mở một file của dự án trong editor rồi bấm lại để gắn vị trí.');
+      else this._post({ type: 'notice', text: 'Mở một file của dự án trong editor để gắn vị trí.' });
     } else if (m.type === 'open') {
       this.host.openRef(String(m.rel || ''), Number(m.line) || 1);
+    } else if (m.type === 'media') {
+      const id = String(m.id || '');
+      const pending = core ? core.getChatMedia(id) : Promise.resolve(null);
+      pending.then((v) => this._post({ type: 'media', id, src: v ? `data:${v.mime};base64,${v.b64}` : null }));
+    } else if (m.type === 'openImage') {
+      this._openImage(String(m.id || ''));
+    } else if (m.type === 'openUrl') {
+      const url = String(m.url || '');
+      if (/^https?:\/\//i.test(url)) vscode.env.openExternal(vscode.Uri.parse(url));
     }
+  }
+
+  // Opens a chat image in VS Code's own image viewer (zoom, copy) from a temporary file.
+  async _openImage(id) {
+    const core = this.host.core();
+    const v = core && /^[0-9a-f]{40}$/.test(id) ? await core.getChatMedia(id) : null;
+    if (!v || !EXT[v.mime]) {
+      vscode.window.showWarningMessage('LAN Collab: ảnh không còn trên hub.');
+      return;
+    }
+    const file = path.join(os.tmpdir(), 'lan-collab-chat', `${id}.${EXT[v.mime]}`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from(v.b64, 'base64'));
+    vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file), { preview: true });
   }
 
   _post(msg) {
@@ -49,22 +79,33 @@ class ChatView {
     this.host.onUnread(0);
   }
 
+  _people() {
+    const core = this.host.core();
+    return {
+      connected: Boolean(core && core.ready),
+      users: core ? [...core.users.values()].map((u) => ({ name: u.name, color: u.color, status: u.status || '' })) : [],
+    };
+  }
+
   // Full redraw: history, who is online, connection state.
   refresh() {
     const core = this.host.core();
-    const users = core ? [...core.users.values()].map((u) => ({ name: u.name, color: u.color })) : [];
-    this._post({
-      type: 'init',
-      connected: Boolean(core && core.ready),
-      me: core ? core.myId : null,
-      users,
-      messages: core ? core.chat.map((msg) => this._decorate(msg)) : [],
-    });
+    this._post({ type: 'init', ...this._people(), messages: core ? core.chat.map((msg) => this._decorate(msg)) : [] });
+  }
+
+  // Someone joined or left: only the header and @-suggestions change.
+  updatePeople() {
+    this._post({ type: 'people', ...this._people() });
+  }
+
+  onRejected(reason) {
+    this._post({ type: 'notice', text: reason });
   }
 
   _decorate(msg) {
     const core = this.host.core();
-    return { ...msg, mine: core && msg.fromId === core.myId, mention: Boolean(core && msg.fromId !== core.myId && core.mentionsMe(msg)) };
+    const mine = Boolean(core && core.isMine(msg));
+    return { ...msg, mine, mention: Boolean(core && !mine && core.mentionsMe(msg)) };
   }
 
   onMessage(msg) {
@@ -78,7 +119,8 @@ class ChatView {
       this.host.onUnread(this.unread);
     }
     if (d.mention && !seen) {
-      const preview = msg.text.length > 120 ? `${msg.text.slice(0, 120)}…` : msg.text;
+      const text = msg.text || '[Ảnh]';
+      const preview = text.length > 120 ? `${text.slice(0, 120)}…` : text;
       vscode.window.showInformationMessage(`LAN Collab — ${msg.from}: ${preview}`, 'Mở chat').then((pick) => {
         if (pick) vscode.commands.executeCommand('lanCollab.openChat');
       });
@@ -86,137 +128,66 @@ class ChatView {
   }
 }
 
-function page(nonce) {
+function validImage(img) {
+  if (!img || typeof img !== 'object' || !EXT[img.mime] || typeof img.b64 !== 'string') return null;
+  return { mime: img.mime, b64: img.b64, w: Number(img.w) || 0, h: Number(img.h) || 0 };
+}
+
+function page(webview, root, nonce) {
+  const css = webview.asWebviewUri(vscode.Uri.joinPath(root, 'chat.css'));
+  const js = webview.asWebviewUri(vscode.Uri.joinPath(root, 'chat.js'));
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style nonce="${nonce}">
-  body { padding: 0; margin: 0; display: flex; flex-direction: column; height: 100vh; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); }
-  #state { padding: 4px 8px; font-size: 0.9em; color: var(--vscode-descriptionForeground); }
-  #log { flex: 1; overflow-y: auto; padding: 4px 8px; }
-  .msg { margin: 6px 0; line-height: 1.4; }
-  .msg.mention { border-left: 3px solid var(--vscode-editorWarning-foreground); padding-left: 6px; background: var(--vscode-editor-inactiveSelectionBackground); }
-  .head { font-size: 0.85em; }
-  .who { font-weight: 600; }
-  .time { color: var(--vscode-descriptionForeground); margin-left: 6px; }
-  .text { white-space: pre-wrap; word-break: break-word; }
-  .text a { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: underline; }
-  #people { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; border-top: 1px solid var(--vscode-panel-border); }
-  .chip { border: 1px solid currentColor; border-radius: 10px; padding: 0 6px; font-size: 0.85em; cursor: pointer; background: none; }
-  #box { display: flex; gap: 4px; padding: 6px 8px 8px; }
-  #box button { white-space: nowrap; }
-  textarea { flex: 1; resize: none; min-height: 2.6em; font-family: inherit; font-size: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); padding: 4px; }
-  textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
-  button.act { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: none; padding: 0 8px; cursor: pointer; }
-  button.act.sec { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
-</style>
+<link rel="stylesheet" href="${css}">
 </head>
 <body>
-<div id="state"></div>
-<div id="log"></div>
-<div id="people"></div>
-<div id="box">
-  <textarea id="input" placeholder="Nhắn cả phòng… (Enter gửi, Shift+Enter xuống dòng, @tên để nhắc)"></textarea>
-  <button class="act sec" id="loc" title="Chèn vị trí file:dòng đang mở">Vị trí</button>
-  <button class="act" id="send" title="Gửi (Enter)">Gửi</button>
+<header id="top">
+  <div id="state"><span class="dot"></span><span id="stateText">Chưa kết nối hub</span></div>
+  <div id="faces"></div>
+</header>
+<div id="logWrap">
+  <main id="log" aria-live="polite"></main>
+  <button id="jump" class="hidden" title="Cuộn xuống tin mới nhất"></button>
 </div>
-<script nonce="${nonce}">
-const vscode = acquireVsCodeApi();
-const log = document.getElementById('log');
-const input = document.getElementById('input');
-const people = document.getElementById('people');
-const state = document.getElementById('state');
-const REF = /([A-Za-z0-9_\\-.\\/\\u00C0-\\uFFFF]+\\.[A-Za-z0-9]+):(\\d+)/g;
-
-function textWithLinks(el, text) {
-  let last = 0;
-  for (const m of text.matchAll(REF)) {
-    el.append(text.slice(last, m.index));
-    const a = document.createElement('a');
-    a.textContent = m[0];
-    a.title = 'Mở ' + m[0];
-    a.addEventListener('click', () => vscode.postMessage({ type: 'open', rel: m[1], line: Number(m[2]) }));
-    el.append(a);
-    last = m.index + m[0].length;
-  }
-  el.append(text.slice(last));
-}
-
-function add(msg) {
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-  const div = document.createElement('div');
-  div.className = 'msg' + (msg.mention ? ' mention' : '');
-  const head = document.createElement('div');
-  head.className = 'head';
-  const who = document.createElement('span');
-  who.className = 'who';
-  who.textContent = msg.mine ? msg.from + ' (bạn)' : msg.from;
-  who.style.color = msg.color || '';
-  if (msg.account) who.title = msg.account.provider + ':' + msg.account.label;
-  const time = document.createElement('span');
-  time.className = 'time';
-  time.textContent = new Date(msg.ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
-  head.append(who, time);
-  const body = document.createElement('div');
-  body.className = 'text';
-  textWithLinks(body, msg.text);
-  div.append(head, body);
-  log.append(div);
-  if (atBottom || msg.mine) log.scrollTop = log.scrollHeight;
-}
-
-function insert(text) {
-  const s = input.selectionStart;
-  input.value = input.value.slice(0, s) + text + input.value.slice(input.selectionEnd);
-  input.selectionStart = input.selectionEnd = s + text.length;
-  input.focus();
-}
-
-function setPeople(users) {
-  people.replaceChildren();
-  for (const u of users) {
-    const b = document.createElement('button');
-    b.className = 'chip';
-    b.textContent = '@' + u.name;
-    b.style.color = u.color || '';
-    b.title = 'Nhắc ' + u.name;
-    b.addEventListener('click', () => insert('@' + u.name + ' '));
-    people.append(b);
-  }
-}
-
-function send() {
-  const text = input.value.trim();
-  if (!text) return;
-  vscode.postMessage({ type: 'send', text });
-  input.value = '';
-}
-
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    send();
-  }
-});
-document.getElementById('send').addEventListener('click', send);
-document.getElementById('loc').addEventListener('click', () => vscode.postMessage({ type: 'location' }));
-
-window.addEventListener('message', (ev) => {
-  const m = ev.data;
-  if (m.type === 'init') {
-    log.replaceChildren();
-    state.textContent = m.connected ? (m.users.length ? m.users.length + ' người khác đang online' : 'Chỉ có bạn trong phòng') : 'Chưa kết nối hub';
-    setPeople(m.users);
-    for (const msg of m.messages) add(msg);
-    log.scrollTop = log.scrollHeight;
-  } else if (m.type === 'msg') add(m.msg);
-  else if (m.type === 'insert') insert(m.text);
-});
-vscode.postMessage({ type: 'ready' });
-</script>
+<footer id="composer">
+  <div id="notice" class="hidden"></div>
+  <div id="attach" class="hidden">
+    <img id="attachImg" alt="">
+    <div id="attachInfo"></div>
+    <button id="attachRemove" class="icon" title="Bỏ ảnh">
+      <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+  </div>
+  <div id="suggest" class="popup hidden" role="listbox"></div>
+  <div id="emoji" class="popup hidden">
+    <div id="emojiTabs"></div>
+    <div id="emojiGrid"></div>
+  </div>
+  <textarea id="input" rows="1" maxlength="4000" placeholder="Nhắn cả phòng · @ để nhắc tên · dán ảnh bằng Ctrl+V"></textarea>
+  <div id="tools">
+    <button id="emojiBtn" class="icon" title="Chèn emoji">
+      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><path d="M5.2 9.6c.7 1 1.6 1.5 2.8 1.5s2.1-.5 2.8-1.5"/><path class="fill" d="M6 6.4a.8.8 0 1 1-1.6 0 .8.8 0 0 1 1.6 0zM11.6 6.4a.8.8 0 1 1-1.6 0 .8.8 0 0 1 1.6 0z"/></svg>
+    </button>
+    <button id="imageBtn" class="icon" title="Gửi ảnh (hoặc dán ảnh bằng Ctrl+V)">
+      <svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><circle cx="5.5" cy="6" r="1.2"/><path d="M1.8 12l3.7-3.6 2.6 2.4 2.4-2.2 3.7 3.4"/></svg>
+    </button>
+    <button id="locBtn" class="icon" title="Chèn vị trí file:dòng đang mở">
+      <svg viewBox="0 0 16 16"><path d="M8 14.5s4.5-4.1 4.5-7.6a4.5 4.5 0 0 0-9 0c0 3.5 4.5 7.6 4.5 7.6z"/><circle cx="8" cy="6.9" r="1.6"/></svg>
+    </button>
+    <span class="grow"></span>
+    <span id="count"></span>
+    <button id="send" title="Gửi (Enter) · Shift+Enter xuống dòng" disabled>
+      <svg viewBox="0 0 16 16"><path class="fill" d="M1.7 2.2l12.6 5.4a.45.45 0 0 1 0 .8L1.7 13.8a.45.45 0 0 1-.62-.52L2.4 8.6l6.1-.6-6.1-.6-1.32-4.68a.45.45 0 0 1 .62-.52z"/></svg>
+      <span>Gửi</span>
+    </button>
+  </div>
+  <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+</footer>
+<script nonce="${nonce}" src="${js}"></script>
 </body>
 </html>`;
 }

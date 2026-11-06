@@ -1,6 +1,6 @@
 'use strict';
 
-// Account allow-list on the hub, chat broadcast, chat history on join and across a hub restart, @mentions.
+// Account allow-list on the hub, chat broadcast, chat history on join and across a hub restart, @mentions, images.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -57,9 +57,9 @@ function client(port, name, account) {
   // Chat reaches everyone (sender included, in hub order); junk is ignored.
   alice.send({ t: 'chat', text: 42 });
   alice.send({ t: 'chat', text: '   ' });
-  assert.ok(alice.sendChat('Vui lòng xem todo/PD1/PD1.py:12'));
+  assert.strictEqual(alice.sendChat('Vui lòng xem todo/PD1/PD1.py:12'), null);
   await sleep(50);
-  assert.ok(bob.sendChat('@alice Đã nhận, sẽ sửa dòng này'));
+  assert.strictEqual(bob.sendChat('@alice Đã nhận, sẽ sửa dòng này'), null);
   await waitFor(() => alice.chat.length === 2 && bob.chat.length === 2, 3000, 'chat tới cả hai');
   assert.deepStrictEqual(alice.chat.map((m) => m.text), bob.chat.map((m) => m.text));
   assert.strictEqual(alice.chat[0].from, 'alice');
@@ -67,6 +67,43 @@ function client(port, name, account) {
   assert.ok(alice.mentionsMe(bob.chat[1]));
   assert.ok(!bob.mentionsMe(bob.chat[1]));
   assert.ok(bob.mentionsMe({ text: 'Họp lúc 15:00 @all' }));
+  assert.ok(bob.mentionsMe({ text: 'nhờ @bob, xem giúp' }));
+  assert.ok(!bob.mentionsMe({ text: '@bobby xem giúp' }), 'tên khác chỉ trùng phần đầu');
+  assert.ok(!bob.mentionsMe({ text: '@allen' }));
+
+  // Own messages stay "mine" after a reconnect (new connection id, same machine).
+  assert.ok(alice.isMine(alice.chat[0]) && !alice.isMine(alice.chat[1]));
+  alice.ls.close();
+  await waitFor(() => !alice.ready, 2000, 'alice mất kết nối');
+  await waitFor(() => alice.ready, 3000, 'alice kết nối lại');
+  assert.ok(alice.isMine(alice.chat[0]) && !bob.isMine(alice.chat[0]));
+  assert.ok(!('uid' in alice.chat[0]));
+
+  // Images: stored once on the hub, the message carries only the id; others fetch the bytes on demand.
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(3000, 7)]);
+  assert.strictEqual(alice.sendChat('Ảnh lỗi', { mime: 'image/png', b64: png.toString('base64'), w: 800, h: 600 }), null);
+  await waitFor(() => bob.chat.length === 3, 3000, 'tin có ảnh tới bob');
+  const img = bob.chat[2].image;
+  assert.deepStrictEqual({ ...img, id: undefined }, { id: undefined, mime: 'image/png', size: png.length, w: 800, h: 600 });
+  assert.ok(!('b64' in bob.chat[2]) && !JSON.stringify(bob.chat[2]).includes(png.toString('base64').slice(0, 40)));
+  const got = await bob.getChatMedia(img.id);
+  assert.strictEqual(got.b64, png.toString('base64'));
+  assert.ok(fs.existsSync(path.join(history, 'chat-media', `${img.id}.png`)));
+  assert.strictEqual(await bob.getChatMedia('0'.repeat(40)), null, 'id không có trong chat');
+  assert.strictEqual(await bob.getChatMedia('../../hub.json'), null);
+
+  // Rejected images: wrong type, too large. An old hub (no "chat-image" feature) is refused locally.
+  const rejected = [];
+  alice.on('chat-rejected', (r) => rejected.push(r));
+  alice.send({ t: 'chat', text: 'x', image: { mime: 'text/html', b64: 'PGI+' } });
+  alice.send({ t: 'chat', text: 'x', image: { mime: 'image/png', b64: Buffer.alloc(4 * 1024 * 1024 + 1).toString('base64') } });
+  await waitFor(() => rejected.length === 2, 3000, 'hub từ chối 2 ảnh');
+  await sleep(50);
+  assert.strictEqual(bob.chat.length, 3, 'ảnh bị từ chối không thành tin nhắn');
+  const features = alice.hubFeatures;
+  alice.hubFeatures = [];
+  assert.match(alice.sendChat('', { mime: 'image/png', b64: 'AA==' }), /Hub đang chạy bản cũ/);
+  alice.hubFeatures = features;
 
   // Editing the allow-list needs no restart; a newcomer gets the history.
   fs.appendFileSync(allowFile, 'carol\n');
@@ -80,7 +117,8 @@ function client(port, name, account) {
   hub = await startHub({ root, port: 0, project: 'Demo', history, allowFile, log: () => {} });
   const dave = client(hub.port, 'dave', { provider: 'github', label: 'alice' });
   await waitFor(() => dave.ready, 3000, 'vào lại sau khi hub khởi động lại');
-  assert.deepStrictEqual(dave.chat.map((m) => m.text), ['Vui lòng xem todo/PD1/PD1.py:12', '@alice Đã nhận, sẽ sửa dòng này']);
+  assert.deepStrictEqual(dave.chat.map((m) => m.text), ['Vui lòng xem todo/PD1/PD1.py:12', '@alice Đã nhận, sẽ sửa dòng này', 'Ảnh lỗi']);
+  assert.strictEqual((await dave.getChatMedia(dave.chat[2].image.id)).b64, png.toString('base64'), 'ảnh còn sau khi hub khởi động lại');
 
   // No allow-list file: anyone with the token may join, also without an account.
   dave.disconnect();

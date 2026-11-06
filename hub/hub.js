@@ -15,6 +15,12 @@ const FLUSH_MS = 500;
 const SNAPSHOT_EVERY_MS = 10 * 60 * 1000;
 const EDIT_NOTE_MS = 2 * 60 * 1000;
 const CHAT_KEEP = 500;
+const IMAGE_MAX = 4 * 1024 * 1024;
+const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const FEATURES = ['chat-image'];
+const PREAUTH_MAX_LINE = 64 * 1024;
+const HELLO_TIMEOUT_MS = 15000;
+const UID_FORGET_MS = 60 * 60 * 1000;
 
 function loadHubId(root) {
   const file = path.join(root, '.lan-collab', 'hub.json');
@@ -48,7 +54,8 @@ function startHub(opts) {
       log(`[CẢNH BÁO] không dời được ${legacyHistory} vào ${historyDir}: ${e.message} (vẫn dùng thư mục mới)`);
     }
   }
-  const excluded = C.makeExcluder([...C.DEFAULT_EXCLUDE, ...(opts.exclude || [])]);
+  const excludePatterns = [...C.DEFAULT_EXCLUDE, ...(opts.exclude || [])];
+  const excluded = C.makeExcluder(excludePatterns);
   const hubId = loadHubId(root);
   const session = crypto.randomBytes(6).toString('hex');
   const abs = (rel) => path.join(root, rel);
@@ -63,6 +70,7 @@ function startHub(opts) {
   }
 
   const chatFile = path.join(historyDir, 'chat.jsonl');
+  const mediaDir = path.join(historyDir, 'chat-media'); // images are stored once here; messages carry only the id
   const chat = [];
   try {
     for (const line of fs.readFileSync(chatFile, 'utf8').split('\n').slice(-CHAT_KEEP - 1)) {
@@ -167,7 +175,11 @@ function startHub(opts) {
 
   function applyOp(c, rel, f, op, rev, seq, src) {
     if (rev < f.logStart || rev > f.rev) return false;
-    for (const s of f.log.slice(rev - f.logStart)) op = TextOperation.transform(op, s)[0];
+    try {
+      for (const s of f.log.slice(rev - f.logStart)) op = TextOperation.transform(op, s)[0];
+    } catch {
+      return false; // op does not fit the text at its rev: the caller asks the client to resync
+    }
     if (op.baseLength !== f.text.length) return false;
     f.text = op.apply(f.text);
     f.log.push(op);
@@ -182,6 +194,16 @@ function startHub(opts) {
     broadcast({ t: 'op', path: rel, rev: f.rev - 1, op: op.ops, by: c.id }, c);
     noteEdit(c, rel, src);
     return true;
+  }
+
+  // Applied-op sequence numbers only matter to a client reconnecting with the same uid; a new extension
+  // session uses a new uid, so the entries of a uid gone for an hour are dropped.
+  function forgetUidLater(uid) {
+    setTimeout(() => {
+      if ([...clients.values()].some((o) => o.uid === uid)) return;
+      const prefix = `${uid}\n`;
+      for (const key of [...lastSeq.keys()]) if (key.startsWith(prefix)) lastSeq.delete(key);
+    }, UID_FORGET_MS).unref();
   }
 
   const handlers = {
@@ -213,7 +235,11 @@ function startHub(opts) {
 
     create(c, m) {
       const rel = C.safeRel(m.path);
-      if (!rel || excluded(rel) || (m.kind === 'text' && typeof m.text !== 'string')) return;
+      // Always answer, so the client does not wait for a file the hub will not take.
+      if (!rel || excluded(rel) || (m.kind === 'text' && typeof m.text !== 'string')) {
+        send(c, { t: 'ignored', path: m.path, reason: rel && excluded(rel) ? 'excluded' : 'invalid' });
+        return;
+      }
       // Same path in another letter case = the same file on Windows (a case-only rename): retire the old name.
       const lower = rel.toLowerCase();
       for (const other of [...files.keys()]) {
@@ -240,6 +266,7 @@ function startHub(opts) {
         C.writeFileAtomic(abs(rel), buf);
       } catch (e) {
         log(`[LỖI] không ghi được ${rel}: ${e.message}`);
+        send(c, { t: 'ignored', path: rel, reason: 'write-failed' });
         return;
       }
       files.set(rel, m.kind === 'text'
@@ -252,7 +279,10 @@ function startHub(opts) {
 
     put(c, m) {
       const rel = C.safeRel(m.path);
-      if (!rel || excluded(rel)) return;
+      if (!rel || excluded(rel)) {
+        send(c, { t: 'ignored', path: m.path, reason: rel ? 'excluded' : 'invalid' });
+        return;
+      }
       const buf = Buffer.from(m.b64 || '', 'base64');
       const f = files.get(rel);
       if (f) {
@@ -263,9 +293,11 @@ function startHub(opts) {
         C.writeFileAtomic(abs(rel), buf);
       } catch (e) {
         log(`[LỖI] không ghi được ${rel}: ${e.message}`);
+        send(c, { t: 'ignored', path: rel, reason: 'write-failed' });
         return;
       }
       files.set(rel, { kind: 'blob', hash: C.sha1(buf) });
+      send(c, { t: 'stored', path: rel, hash: files.get(rel).hash }); // the client may now treat this version as synced
       broadcast(fileMsg(rel), c);
       noteEdit(c, rel, 'disk');
     },
@@ -313,8 +345,14 @@ function startHub(opts) {
 
     chat(c, m) {
       const text = typeof m.text === 'string' ? m.text.trim().slice(0, 4000) : '';
-      if (!text) return;
-      const msg = { id: crypto.randomBytes(6).toString('hex'), ts: Date.now(), from: c.name, fromId: c.id, color: c.color, account: c.account, text };
+      let image = null;
+      if (m.image && typeof m.image === 'object') {
+        image = saveImage(m.image);
+        if (!image) return send(c, { t: 'chat_rejected', reason: `Ảnh không hợp lệ hoặc lớn hơn ${IMAGE_MAX / 1024 / 1024} MB.` });
+      }
+      if (!text && !image) return;
+      const msg = { id: crypto.randomBytes(6).toString('hex'), ts: Date.now(), from: c.name, fromId: c.id, fromKey: c.key, color: c.color, account: c.account, text };
+      if (image) msg.image = image;
       chat.push(msg);
       if (chat.length > CHAT_KEEP) chat.splice(0, chat.length - CHAT_KEEP);
       try {
@@ -326,10 +364,43 @@ function startHub(opts) {
       broadcast({ t: 'chat', msg });
     },
 
+    media(c, m) {
+      const id = typeof m.id === 'string' && /^[0-9a-f]{40}$/.test(m.id) ? m.id : null;
+      const meta = id && chat.find((x) => x.image && x.image.id === id);
+      let b64 = null;
+      try {
+        if (meta) b64 = fs.readFileSync(path.join(mediaDir, `${id}.${IMAGE_TYPES[meta.image.mime]}`)).toString('base64');
+      } catch {
+        // deleted from the server by hand
+      }
+      send(c, b64 ? { t: 'media', id, mime: meta.image.mime, b64 } : { t: 'media', id: String(m.id || '').slice(0, 40), missing: true });
+    },
+
     ping(c) {
       send(c, { t: 'pong' });
     },
   };
+
+  // Returns the image's metadata for the chat message, or null when it is not an accepted image.
+  function saveImage(img) {
+    const ext = IMAGE_TYPES[img.mime];
+    if (!ext || typeof img.b64 !== 'string' || img.b64.length > Math.ceil(IMAGE_MAX / 3) * 4) return null;
+    const buf = Buffer.from(img.b64, 'base64');
+    if (!buf.length || buf.length > IMAGE_MAX) return null;
+    const id = C.sha1(buf);
+    const file = path.join(mediaDir, `${id}.${ext}`);
+    try {
+      if (!fs.existsSync(file)) {
+        fs.mkdirSync(mediaDir, { recursive: true });
+        fs.writeFileSync(file, buf);
+      }
+    } catch (e) {
+      log(`[LỖI] không lưu được ảnh chat: ${e.message}`);
+      return null;
+    }
+    const dim = (v) => (Number.isInteger(v) && v > 0 && v < 100000 ? v : 0);
+    return { id, mime: img.mime, size: buf.length, w: dim(img.w), h: dim(img.h) };
+  }
 
   // allowed-accounts file: one account per line, "github:<user>", "microsoft:<email>" or just the name;
   // "#" starts a comment. Missing or empty file = everyone with the token may join. Re-read on every join.
@@ -369,6 +440,9 @@ function startHub(opts) {
       applied,
       users: [...clients.values()].filter((o) => o !== c).map(publicUser),
       activity: activity.slice(-60),
+      features: FEATURES,
+      key: c.key,
+      exclude: excludePatterns, // clients skip these too, so nobody offers files the hub will refuse
       chat: chat.slice(-200),
     });
   }
@@ -378,6 +452,19 @@ function startHub(opts) {
     sock.setNoDelay(true);
     sock.setKeepAlive(true, 10000);
     let me = null;
+    // Until the hello is accepted, nobody may hold the connection open or make the hub buffer much.
+    ls.maxLine = PREAUTH_MAX_LINE;
+    const helloTimer = setTimeout(() => {
+      if (!me) ls.close();
+    }, HELLO_TIMEOUT_MS);
+    let lastKeepAlive = 0;
+    ls.on('partial', () => {
+      // A big upload keeps the client's own messages (and our pongs) waiting: show it the link is alive.
+      if (me && Date.now() - lastKeepAlive > 5000) {
+        lastKeepAlive = Date.now();
+        send(me, { t: 'pong' });
+      }
+    });
     ls.on('error', () => {});
     ls.on('message', (m) => {
       if (!m || typeof m !== 'object' || typeof m.t !== 'string') {
@@ -411,6 +498,8 @@ function startHub(opts) {
         me = {
           id: crypto.randomBytes(4).toString('hex'),
           uid: String(m.uid || ''),
+          // Marks one's own chat messages across reconnects and restarts without revealing the device id.
+          key: C.sha1(`chat:${m.device || m.uid || crypto.randomUUID()}`).slice(0, 16),
           name: String(m.name || (account && account.label) || 'ẩn danh').slice(0, 60),
           account,
           color: COLORS[colorIndex++ % COLORS.length],
@@ -418,6 +507,8 @@ function startHub(opts) {
           status: '',
           ls,
         };
+        clearTimeout(helloTimer);
+        ls.maxLine = C.MAX_LINE;
         clients.set(me.id, me);
         welcome(me);
         broadcast({ t: 'joined', user: publicUser(me) }, me);
@@ -433,8 +524,10 @@ function startHub(opts) {
       }
     });
     ls.on('close', () => {
+      clearTimeout(helloTimer);
       if (!me) return;
       clients.delete(me.id);
+      forgetUidLater(me.uid);
       broadcast({ t: 'left', id: me.id });
       addActivity(me.name, me.color, 'rời phòng');
     });

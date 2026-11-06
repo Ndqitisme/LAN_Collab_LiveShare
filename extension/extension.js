@@ -37,6 +37,7 @@ function activate(context) {
   tree = new PeopleTree();
   chatView = new ChatView({
     core: () => core,
+    extensionUri: context.extensionUri,
     sendLocation,
     openRef,
     onUnread: (n) => {
@@ -202,16 +203,31 @@ function showDownloadProgress() {
   const c = core;
   if (!c || c.loading.size < 3) return;
   const total = c.loading.size;
-  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LAN Collab: đang tải dự án' }, (progress) => new Promise((resolve) => {
+  let skipped = 0;
+  const onIgnored = () => {
+    skipped += 1;
+  };
+  c.on('ignored', onIgnored);
+  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LAN Collab: đang đồng bộ dự án', cancellable: true }, (progress, cancel) => new Promise((resolve) => {
     let shown = 0;
-    const t = setInterval(() => {
+    let t = null;
+    const finish = (message) => {
+      clearInterval(t);
+      c.off('ignored', onIgnored);
+      if (message) vscode.window.showInformationMessage(message);
+      resolve();
+    };
+    // Closing the notification only hides it; synchronization continues in the background.
+    cancel.onCancellationRequested(() => finish(null));
+    t = setInterval(() => {
       const done = total - c.loading.size;
       progress.report({ message: `${done}/${total} file`, increment: ((done - shown) / total) * 100 });
       shown = done;
-      if (core !== c || c.loading.size === 0) {
-        clearInterval(t);
-        if (core === c) vscode.window.showInformationMessage(`LAN Collab: đã tải đủ ${total} file.`);
-        resolve();
+      if (core !== c) finish(null);
+      else if (c.loading.size === 0) {
+        finish(skipped
+          ? `LAN Collab: đã đồng bộ ${total - skipped}/${total} file. ${skipped} file không được hub nhận, xem chi tiết trong nhật ký (LAN Collab: Xem nhật ký).`
+          : `LAN Collab: đã đồng bộ ${total} file.`);
       }
     }, 200);
   }));
@@ -269,6 +285,7 @@ async function startClient() {
     name,
     account,
     uid: crypto.randomUUID(),
+    device: vscode.env.machineId,
     exclude: cfg.get('exclude'),
     autoSave: cfg.get('autoSave'),
     state: {
@@ -285,6 +302,7 @@ async function startClient() {
     if (pick) signIn();
   });
   core.on('chat', (msg) => chatView.onMessage(msg));
+  core.on('chat-rejected', (reason) => chatView.onRejected(reason));
   core.on('ready', () => {
     chatView.refresh();
     showDownloadProgress();
@@ -311,7 +329,7 @@ async function startClient() {
     tree.refresh();
     updateStatus();
     scheduleDecorations();
-    chatView.refresh();
+    chatView.updatePeople();
   });
   core.on('presence', (id) => {
     tree.refresh();
