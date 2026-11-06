@@ -1,0 +1,17 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.vsix
+
+# Secrets and per-installation data written by the hub launcher
+hub/token-*.txt
+hub/allowed-accounts-*.txt
+
+# LAN Collab state (hub history, client backups) and temporary files
+.lan-collab/
+*.lc-tmp
+
+# VS Code test downloads, editor and OS files
+.vscode-test/
+.DS_Store
+Thumbs.db

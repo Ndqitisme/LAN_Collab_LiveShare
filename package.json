@@ -1,0 +1,176 @@
+{
+  "name": "lan-collab",
+  "displayName": "LAN Collab",
+  "description": "Chỉnh sửa cộng tác thời gian thực qua máy chủ trong mạng nội bộ, không phụ thuộc dịch vụ đám mây. Mỗi máy làm việc trên bản sao tệp cục bộ của dự án.",
+  "version": "0.1.0",
+  "publisher": "ndqitisme",
+  "author": {
+    "name": "Ndqitisme"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ndqitisme/LAN_Collab_LiveShare.git"
+  },
+  "homepage": "https://github.com/Ndqitisme/LAN_Collab_LiveShare#readme",
+  "bugs": {
+    "url": "https://github.com/Ndqitisme/LAN_Collab_LiveShare/issues"
+  },
+  "keywords": [
+    "collaboration",
+    "live share",
+    "pair programming",
+    "lan",
+    "self-hosted",
+    "real-time",
+    "operational transformation"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0b2a6f",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "test": "node test/ot.test.js && node test/chat.test.js && node test/sync.test.js",
+    "test:vscode": "node test/vscode/run.js",
+    "hub": "node hub/hub.js",
+    "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package -o dist/",
+    "package:hub": "node tools/package-hub.js",
+    "package:all": "npm run package && npm run package:hub"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "lanCollab.connect",
+        "title": "Kết nối",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.disconnect",
+        "title": "Ngắt kết nối",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.follow",
+        "title": "Đi theo một người",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.unfollow",
+        "title": "Thôi đi theo",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.setStatus",
+        "title": "Đặt trạng thái (đang làm gì)",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.showLog",
+        "title": "Xem nhật ký",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.menu",
+        "title": "Menu",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.openChat",
+        "title": "Mở chat",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.signIn",
+        "title": "Dùng tài khoản VS Code (GitHub/Microsoft)",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.join",
+        "title": "Tham gia bằng mã",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.copyInvite",
+        "title": "Sao chép mã mời",
+        "category": "LAN Collab"
+      }
+    ],
+    "views": {
+      "lanCollab": [
+        {
+          "id": "lanCollab.people",
+          "name": "Đồng đội"
+        },
+        {
+          "type": "webview",
+          "id": "lanCollab.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "LAN Collab",
+      "properties": {
+        "lanCollab.server": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Địa chỉ hub dạng `IP:cổng`, ví dụ `192.168.1.10:8200`. Không cần đặt nếu thư mục đã tham gia bằng mã mời."
+        },
+        "lanCollab.project": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Tên dự án trên hub (tham số `--project` của hub). Nên đặt trong `.vscode/settings.json` của dự án; hub từ chối thư mục có tên dự án khác."
+        },
+        "lanCollab.token": {
+          "type": "string",
+          "default": "",
+          "description": "Token của hub (in ra khi hub khởi động). Nên đặt trong User settings, không đặt trong settings của dự án."
+        },
+        "lanCollab.name": {
+          "type": "string",
+          "default": "",
+          "description": "Tên hiển thị trong phòng. Để trống: dùng tên tài khoản VS Code; nếu chưa đăng nhập thì dùng tài-khoản-Windows@tên-máy.",
+          "scope": "application"
+        },
+        "lanCollab.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tự động kết nối khi mở thư mục đã gắn với hub (qua mã mời, hoặc qua lanCollab.server và lanCollab.project)."
+        },
+        "lanCollab.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tự động lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên ổ đĩa của mọi máy luôn cập nhật (trình chạy, debugger và công cụ AI đều đọc từ ổ đĩa)."
+        },
+        "lanCollab.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Mẫu glob không đồng bộ, bổ sung vào danh sách mặc định (`.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `.lan-collab`, `~$*`, `.DS_Store`, `Thumbs.db`). Ví dụ: `[\"output.csv\", \"build/**\"]`."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lanCollab",
+          "title": "LAN Collab",
+          "icon": "media/icon.svg"
+        }
+      ]
+    }
+  }
+}
