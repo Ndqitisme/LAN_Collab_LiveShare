@@ -533,7 +533,8 @@
     renderEmoji();
   });
   document.addEventListener('click', (e) => {
-    if (!emojiBox.contains(e.target)) emojiBox.classList.add('hidden');
+    // composedPath, not contains(): a tab click re-renders the tabs, so its target is no longer in the box.
+    if (!e.composedPath().includes(emojiBox)) emojiBox.classList.add('hidden');
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') emojiBox.classList.add('hidden');
