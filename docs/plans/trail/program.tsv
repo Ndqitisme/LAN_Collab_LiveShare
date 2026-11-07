@@ -1,0 +1,9 @@
+ts	phase	decision	why	evidence	result
+2026-11-07T19:00:00+07:00	start	operator gave the go to execute the plan up to 0.2.0 and skip 0.3	goal set by the operator in this session	this session	running
+2026-11-07T19:05:00+07:00	process	the coordinator merges PRs into local branches itself and never pushes	the operator asked for uninterrupted execution, and local merges are reversible	git log main	decided
+2026-11-07T19:10:00+07:00	process	one fresh Opus agent per PR in its own worktree, tracks A and B in parallel	pstack fresh-subagent rule and the parallel branch plan	C:/Users/BDT-QUY/Desktop/Code/lc-wt	decided
+2026-11-07T19:15:00+07:00	prototype	MSVC build tools are missing, so the gnu Rust toolchain is pinned instead of msvc	link.exe absent and vswhere lists no Visual Studio, while gnu plus winlibs mingw builds	scratchpad msvc-probe	decided
+2026-11-07T19:30:00+07:00	prototype	a minimal Tauri 2 app builds with the gnu toolchain and exposes WebView2 CDP through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS	settles the P0 Appendix A question before A7 depends on it	scratchpad tauri-probe, CDP target title probe at http://tauri.localhost/	VERIFIED
+2026-11-07T21:30:00+07:00	merge	merged P0-1, P0-3, P0-4, P0-2 into main and cut upgrade/hub and upgrade/extension, rebased A1 onto upgrade/hub	P0 complete, every PR reported its unit, live and perf boxes	main 165bff2, upgrade/hub ccb2220	npm test 20 pass
+2026-11-07T21:31:00+07:00	verdict	accepted P0-2 although the prescribed perf order showed plus 13 percent at p99	the reversed order showed about 0 percent and the op path is unchanged, so the gap is order bias	docs/plans/trail/P0.tsv P0-2 rows	accepted
+2026-11-07T21:32:00+07:00	review	one Opus high reviewer covers all protocol, storage, auth and concurrency changes before I2 instead of one per PR	the operator's CLAUDE.md asks for one review per batch by risk	pending	open
