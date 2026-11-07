@@ -367,7 +367,7 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
 }
 
 /// Drops `.`, `..` (lexically) and trailing separators, so one folder written two ways compares equal.
-fn normalize(p: &Path) -> PathBuf {
+pub fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

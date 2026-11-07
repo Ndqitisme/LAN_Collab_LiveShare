@@ -1,0 +1,32 @@
+[package]
+name = "lanhub-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "LanHub"
+
+[lib]
+name = "lanhub_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "LanHub"
+path = "src/main.rs"
+# Its test binary would link Tauri without the app manifest and fail to start (comctl32 v6 entry points).
+test = false
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+lanhub-core = { path = "../../crates/lanhub-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml_edit = "=0.25.17"
+tauri = { version = "=2.12.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "=2.5.4"
+tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-clipboard-manager = "=2.5.0"
+

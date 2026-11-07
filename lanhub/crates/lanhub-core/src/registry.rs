@@ -22,7 +22,7 @@ use crate::config::{Config, HubSettings, ProjectConfig};
 use crate::exclude::{DEFAULT_EXCLUDE, Excluder};
 use crate::files::{is_text, uniform_eol, walk};
 use crate::logs::log_in;
-use crate::project::{ActorMsg, ClientInfo, LoadedFile, Project, ProjectInfo};
+use crate::project::{ActorMsg, ClientInfo, LoadedFile, Project, ProjectInfo, ProjectStats};
 use crate::router::{self, Router, Table};
 use crate::session::ProjectHandle;
 use crate::util::{self, log, now_ms, random_hex, sha1_hex};
@@ -72,6 +72,10 @@ pub struct ProjectStatus {
     pub hub_id: Option<String>,
     pub files: Option<usize>,
     pub clients: usize,
+    /// Operations applied since the project started; a reader samples it for a rate.
+    pub ops: u64,
+    /// Milliseconds since the epoch of the last edit or member activity.
+    pub last_activity: Option<u64>,
     pub advertise: bool,
     pub token: String,
     pub started_at: Option<u64>,
@@ -99,6 +103,7 @@ struct Running {
     generation: u64,
     files: usize,
     members: Arc<AtomicUsize>,
+    stats: Arc<ProjectStats>,
     started_at: u64,
 }
 
@@ -482,6 +487,7 @@ impl Registry {
             cfg.debug.clone(),
         );
         let members = project.member_count();
+        let stats = project.stats();
         st.next_gen += 1;
         let generation = st.next_gen;
         let actor = tokio::spawn(crate::logs::in_project(cfg.name.clone(), project.run(rx)));
@@ -502,6 +508,7 @@ impl Registry {
             generation,
             files,
             members,
+            stats,
             started_at: now_ms(),
         })
     }
@@ -584,8 +591,12 @@ impl Registry {
             state,
             error,
             hub_id: running.map(|r| r.handle.info.hub_id.clone()),
-            files: running.map(|r| r.files),
+            files: running.map(|r| r.stats.files.load(Ordering::Relaxed)),
             clients: running.map_or(0, |r| r.members.load(Ordering::Relaxed)),
+            ops: running.map_or(0, |r| r.stats.ops.load(Ordering::Relaxed)),
+            last_activity: running
+                .map(|r| r.stats.last_activity.load(Ordering::Relaxed))
+                .filter(|&t| t > 0),
             advertise: e.cfg.advertise,
             token: e.cfg.token.clone(),
             started_at: running.map(|r| r.started_at),
