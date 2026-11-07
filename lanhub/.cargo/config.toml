@@ -1,0 +1,5 @@
+# `cargo test -p lanhub-protocol` writes the TypeScript types with ts-rs; the protocol's numbers are
+# JavaScript numbers, so 64-bit integers export as `number`, not `bigint`.
+[env]
+TS_RS_EXPORT_DIR = { value = "../packages/protocol/src/generated", relative = true }
+TS_RS_LARGE_INT = "number"
