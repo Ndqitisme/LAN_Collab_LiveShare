@@ -7,9 +7,10 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { startHub } = require('../hub/hub');
-const { CollabClient } = require('../lib/client-core');
-const { EditorBinding, normalizeEol } = require('../lib/editor-binding');
+const C = require('../../lib/common');
+const { CollabClient } = require('../../lib/client-core');
+const { EditorBinding, normalizeEol } = require('../../lib/editor-binding');
+const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
 function rng(seed) {
   let s = seed >>> 0;
@@ -163,7 +164,7 @@ async function runScenario(seed, noDelete) {
   fs.mkdirSync(path.join(hubRoot, 'todo', 'PD1'), { recursive: true });
   fs.writeFileSync(path.join(hubRoot, 'todo', 'PD1', 'input.csv'), 'x,y\n');
   fs.writeFileSync(path.join(hubRoot, 'data.xlsx'), Buffer.from([0x50, 0x4b, 3, 4, 0, 1, 2]));
-  const hub = await startHub({ root: hubRoot, port: 0, project: 'Demo', token: 'tk', history: mkdtemp('hist'), log: () => {} });
+  const hub = await startHubProcess({ root: hubRoot, project: 'Demo', token: 'tk', history: mkdtemp('hist') });
 
   const clients = [];
   for (let i = 0; i < 3; i++) {
@@ -248,14 +249,18 @@ async function runScenario(seed, noDelete) {
   await waitFor(quiet, 15000, 'hệ thống lặng');
   await sleep(800);
   await waitFor(quiet, 15000, 'hệ thống lặng (lần 2)');
-  hub.flushAll();
+  // The hub's memory as the protocol shows it; its disk is read once stop() has written every pending file.
+  const manifest = (await probeWelcome(hub.port, { token: 'tk', project: 'Demo' })).files;
+  for (const c of clients) c.disconnect();
+  await hub.stop();
+  const hubText = (rel) => fs.readFileSync(path.join(hubRoot, rel), 'utf8');
 
   const problems = [];
-  for (const [rel, f] of hub.files) {
+  for (const [rel, f] of Object.entries(manifest)) {
     if (f.kind !== 'text') continue;
-    const onHubDisk = fs.readFileSync(path.join(hubRoot, rel), 'utf8');
-    if (onHubDisk !== f.text) problems.push(`${rel}: đĩa hub khác bộ nhớ hub
-    mem=${JSON.stringify(f.text)}
+    const onHubDisk = hubText(rel);
+    if (C.sha1(onHubDisk) !== f.hash) problems.push(`${rel}: đĩa hub khác bộ nhớ hub
+    mem sha1=${f.hash}
     disk=${JSON.stringify(onHubDisk)}`);
     for (const c of clients) {
       const e = c.entries.get(rel);
@@ -263,10 +268,10 @@ async function runScenario(seed, noDelete) {
         problems.push(`${rel}: ${c.name} không có file`);
         continue;
       }
-      if (e.text !== f.text) problems.push(`${rel}: ${c.name} lệch hub\n    hub=${JSON.stringify(f.text)}\n    máy=${JSON.stringify(e.text)}`);
+      if (e.text !== onHubDisk) problems.push(`${rel}: ${c.name} lệch hub\n    hub=${JSON.stringify(onHubDisk)}\n    máy=${JSON.stringify(e.text)}`);
       const ed = c.editors.get(rel);
-      if (ed && ed.binding.bom + ed.rText !== f.text) problems.push(`${rel}: editor của ${c.name} lệch hub ${JSON.stringify(ed.binding.bom + ed.rText)}`);
-      if (!ed && fs.readFileSync(c.abs(rel), "utf8") !== f.text) problems.push(`${rel}: đĩa của ${c.name} lệch hub ${JSON.stringify(fs.readFileSync(c.abs(rel), "utf8"))}`);
+      if (ed && ed.binding.bom + ed.rText !== onHubDisk) problems.push(`${rel}: editor của ${c.name} lệch hub ${JSON.stringify(ed.binding.bom + ed.rText)}`);
+      if (!ed && fs.readFileSync(c.abs(rel), "utf8") !== onHubDisk) problems.push(`${rel}: đĩa của ${c.name} lệch hub ${JSON.stringify(fs.readFileSync(c.abs(rel), "utf8"))}`);
     }
   }
   for (const c of clients) {
@@ -279,16 +284,14 @@ async function runScenario(seed, noDelete) {
   if (noDelete) {
     const initial = { 'a.py': 25, 'bom.csv': 15, 'crlf.py': 14 };
     for (const [rel, n] of Object.entries(initial)) {
-      const got = hub.files.get(rel).text.length;
+      const got = hubText(rel).length;
       if (got !== n + (stats.inserted[rel] || 0)) problems.push(`${rel}: mất chữ — dài ${got}, kỳ vọng ${n + (stats.inserted[rel] || 0)}`);
     }
   }
-  const bomText = hub.files.get('bom.csv').text;
+  const bomText = hubText('bom.csv');
   if (!bomText.startsWith('﻿')) problems.push('bom.csv mất BOM');
   if (!fs.existsSync(path.join(clients[1].root, '.lan-collab', 'backup'))) problems.push('c1: không có bản sao lưu a.py cũ');
 
-  for (const c of clients) c.disconnect();
-  await hub.close();
   return problems;
 }
 

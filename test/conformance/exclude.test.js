@@ -7,8 +7,8 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { startHub } = require('../hub/hub');
-const { CollabClient } = require('../lib/client-core');
+const { CollabClient } = require('../../lib/client-core');
+const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-excl-${n}-`));
@@ -43,15 +43,16 @@ function seed(root) {
 (async () => {
   const hubRoot = tmp('hub');
   fs.writeFileSync(path.join(hubRoot, 'shared.txt'), 'shared\n');
-  const hub = await startHub({ root: hubRoot, port: 0, project: 'Demo', exclude: ['output.csv'], log: () => {} });
+  const hub = await startHubProcess({ root: hubRoot, project: 'Demo', exclude: ['output.csv'] });
 
   // 1. The client has no exclude of its own, but learns the hub's list and does not offer output.csv.
   const r1 = tmp('c1');
   seed(r1);
   const c1 = client(hub.port, r1);
   await waitFor(() => c1.ready && c1.loading.size === 0, 5000, 'c1 đồng bộ xong');
-  assert.ok(!hub.files.has('products/P1/output.csv'), 'hub không được nhận output.csv');
-  assert.ok(hub.files.has('products/P1/P1.py'));
+  const { files } = await probeWelcome(hub.port, { project: 'Demo' });
+  assert.ok(!('products/P1/output.csv' in files), 'hub không được nhận output.csv');
+  assert.ok('products/P1/P1.py' in files);
   assert.ok(fs.existsSync(path.join(r1, 'products', 'P1', 'output.csv')), 'output.csv trên máy phải giữ nguyên');
   assert.ok(fs.existsSync(path.join(r1, 'shared.txt')));
 
@@ -91,7 +92,7 @@ function seed(root) {
   assert.ok(!c2.loading.has('products/P1/output.csv'));
   c2.disconnect();
 
-  await hub.close();
+  await hub.stop();
   console.log('exclude.test.js: OK');
   process.exit(0);
 })().catch((e) => {

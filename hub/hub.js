@@ -560,7 +560,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(argv[i]);
     if (!m) continue;
-    out[m[1]] = m[2] !== undefined ? m[2] : argv[++i];
+    const next = argv[i + 1];
+    if (m[2] !== undefined) out[m[1]] = m[2];
+    else if (next === undefined || next.startsWith('--')) out[m[1]] = true;
+    else out[m[1]] = argv[++i];
   }
   return out;
 }
@@ -581,11 +584,17 @@ if (require.main === module) {
     allowFile: a['allow-file'],
     exclude: a.exclude ? a.exclude.split(',') : [],
   }).then((hub) => {
+    if (a['log-format'] === 'json') console.log(JSON.stringify({ event: 'listening', port: hub.port }));
     const stop = () => {
       hub.flushAll();
       process.exit(0);
     };
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, stop);
+    // A parent on Windows cannot send a catchable SIGINT, so closing our stdin is its graceful stop.
+    if (a['stop-on-stdin-close']) {
+      process.stdin.on('end', stop);
+      process.stdin.resume();
+    }
     // A bug in one message handler must not take the shared text of everyone down with it.
     process.on('uncaughtException', (e) => {
       console.error(`[LỖI] ${e.stack || e}`);

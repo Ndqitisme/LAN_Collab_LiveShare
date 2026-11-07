@@ -6,10 +6,10 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { startHub } = require('../hub/hub');
-const { CollabClient } = require('../lib/client-core');
-const { TextOperation } = require('../lib/ot');
-const C = require('../lib/common');
+const { CollabClient } = require('../../lib/client-core');
+const { TextOperation } = require('../../lib/ot');
+const C = require('../../lib/common');
+const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-rob-${n}-`));
@@ -17,7 +17,7 @@ const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-rob-${n}-`)
 async function waitFor(cond, ms, what) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    if (cond()) return;
+    if (await cond()) return;
     await sleep(20);
   }
   throw new Error(`Hết giờ chờ: ${what}`);
@@ -79,7 +79,8 @@ async function fakeHub() {
   // 2. Windows aliases of excluded folders are refused by the hub.
   const hubRoot = tmp('hub');
   fs.writeFileSync(path.join(hubRoot, 'a.txt'), 'hello');
-  const hub = await startHub({ root: hubRoot, port: 0, project: 'p', log: () => {} });
+  const hub = await startHubProcess({ root: hubRoot, project: 'p' });
+  const hubFiles = async () => (await probeWelcome(hub.port, { project: 'p' })).files;
   {
     const c = client(hub.port, tmp('c1'));
     await waitFor(() => c.ready && c.loading.size === 0, 3000, 'c1 vào phòng');
@@ -88,7 +89,7 @@ async function fakeHub() {
     c._dispatch = (m) => (m.t === 'ignored' ? ignored.push(m.path) : dispatch(m));
     for (const p of ['GIT~1/hooks/pre-commit', '.git./hooks/x', 'a.txt:stream', 'docs/nul']) c.send({ t: 'create', path: p, kind: 'text', text: 'x' });
     await waitFor(() => ignored.length === 4, 2000, 'hub từ chối 4 đường dẫn');
-    assert.deepStrictEqual([...hub.files.keys()], ['a.txt']);
+    assert.deepStrictEqual(Object.keys(await hubFiles()), ['a.txt']);
     assert.ok(!fs.existsSync(path.join(hubRoot, '.git')));
     c.disconnect();
   }
@@ -112,7 +113,7 @@ async function fakeHub() {
     await waitFor(() => !e.loading && !e.ot.outstanding, 2000, 'resync xong');
     await sleep(200);
     assert.strictEqual(e.text, 'hello world');
-    assert.strictEqual(hub.files.get('a.txt').text, 'hello world');
+    assert.strictEqual((await hubFiles())['a.txt'].hash, C.sha1('hello world'));
 
     // An op that cannot be transformed on the hub gets an answer (resync), not silence.
     const answers = [];
@@ -133,7 +134,7 @@ async function fakeHub() {
     await waitFor(() => c.ready && c.loading.size === 0, 3000, 'c3 vào phòng');
     fs.writeFileSync(path.join(root, 'data.bin'), Buffer.from([0, 1, 2, 3]));
     c.onDiskEvent(path.join(root, 'data.bin'));
-    await waitFor(() => hub.files.has('data.bin'), 3000, 'hub nhận data.bin');
+    await waitFor(async () => 'data.bin' in (await hubFiles()), 3000, 'hub nhận data.bin');
     const v1 = C.sha1(Buffer.from([0, 1, 2, 3]));
     await waitFor(() => c.entries.get('data.bin').hubHash === v1, 2000, 'hub xác nhận v1');
 
@@ -148,7 +149,8 @@ async function fakeHub() {
     c.disconnect();
   }
 
-  await hub.close();
+  await hub.stop();
+  assert.strictEqual(fs.readFileSync(path.join(hubRoot, 'a.txt'), 'utf8'), 'hello world');
   console.log('robustness.test.js: OK');
   process.exit(0);
 })().catch((e) => {

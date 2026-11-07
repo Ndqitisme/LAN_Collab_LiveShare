@@ -5,8 +5,8 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { startHub } = require('../hub/hub');
-const { CollabClient } = require('../lib/client-core');
+const { CollabClient } = require('../../lib/client-core');
+const { startHubProcess } = require('../support/hub-process');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-chat-${n}-`));
@@ -40,7 +40,8 @@ function client(port, name, account) {
   const history = tmp('hist');
   const allowFile = path.join(tmp('cfg'), 'allowed.txt');
   fs.writeFileSync(allowFile, '# comment\ngithub:Alice\n  bob@corp.com  # any provider\n');
-  let hub = await startHub({ root, port: 0, project: 'Demo', history, allowFile, log: () => {} });
+  const start = () => startHubProcess({ root, project: 'Demo', history, allowFile });
+  let hub = await start();
 
   // Allow-list: matching is case-insensitive; with or without provider prefix.
   const alice = client(hub.port, 'alice', { provider: 'github', label: 'alice' });
@@ -88,7 +89,6 @@ function client(port, name, account) {
   assert.ok(!('b64' in bob.chat[2]) && !JSON.stringify(bob.chat[2]).includes(png.toString('base64').slice(0, 40)));
   const got = await bob.getChatMedia(img.id);
   assert.strictEqual(got.b64, png.toString('base64'));
-  assert.ok(fs.existsSync(path.join(history, 'chat-media', `${img.id}.png`)));
   assert.strictEqual(await bob.getChatMedia('0'.repeat(40)), null, 'id không có trong chat');
   assert.strictEqual(await bob.getChatMedia('../../hub.json'), null);
 
@@ -113,8 +113,9 @@ function client(port, name, account) {
 
   // History survives a hub restart.
   for (const c of [alice, bob, carol, mallory, anon]) c.disconnect();
-  await hub.close();
-  hub = await startHub({ root, port: 0, project: 'Demo', history, allowFile, log: () => {} });
+  await hub.stop();
+  assert.ok(fs.existsSync(path.join(history, 'chat-media', `${img.id}.png`)));
+  hub = await start();
   const dave = client(hub.port, 'dave', { provider: 'github', label: 'alice' });
   await waitFor(() => dave.ready, 3000, 'vào lại sau khi hub khởi động lại');
   assert.deepStrictEqual(dave.chat.map((m) => m.text), ['Vui lòng xem todo/PD1/PD1.py:12', '@alice Đã nhận, sẽ sửa dòng này', 'Ảnh lỗi']);
@@ -122,13 +123,13 @@ function client(port, name, account) {
 
   // No allow-list file: anyone with the token may join, also without an account.
   dave.disconnect();
-  await hub.close();
+  await hub.stop();
   fs.writeFileSync(allowFile, '# nobody listed\n');
-  hub = await startHub({ root, port: 0, project: 'Demo', history, allowFile, log: () => {} });
+  hub = await start();
   const eve = client(hub.port, 'eve', null);
   await waitFor(() => eve.ready, 3000, 'danh sách trống: vào tự do');
   eve.disconnect();
-  await hub.close();
+  await hub.stop();
   console.log('chat.test.js: OK');
   process.exit(0);
 })().catch((e) => {
