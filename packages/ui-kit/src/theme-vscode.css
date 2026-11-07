@@ -1,0 +1,78 @@
+/*
+  Maps the --lc- tokens to the --vscode-* variables that VS Code injects into
+  every webview, so the kit follows the user's theme without code. This is the
+  only file in the kit allowed to read --vscode-* variables.
+*/
+:root {
+  --lc-font: var(--vscode-font-family);
+  --lc-font-mono: var(--vscode-editor-font-family);
+  --lc-font-size: var(--vscode-font-size);
+
+  --lc-bg: var(--vscode-editor-background);
+  --lc-surface: var(--vscode-editorWidget-background);
+  --lc-surface-2: var(--vscode-sideBarSectionHeader-background, var(--vscode-editorWidget-background));
+  --lc-fg: var(--vscode-foreground);
+  --lc-muted: var(--vscode-descriptionForeground);
+  --lc-border: var(--vscode-widget-border, var(--vscode-panel-border));
+  --lc-border-strong: var(--vscode-panel-border, var(--vscode-widget-border));
+  --lc-control-border: var(--vscode-button-border, transparent);
+
+  --lc-accent: var(--vscode-button-background);
+  --lc-accent-hover: var(--vscode-button-hoverBackground);
+  --lc-accent-fg: var(--vscode-button-foreground);
+  --lc-secondary: var(--vscode-button-secondaryBackground);
+  --lc-secondary-hover: var(--vscode-button-secondaryHoverBackground);
+  --lc-secondary-fg: var(--vscode-button-secondaryForeground);
+
+  --lc-ok: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+  --lc-warn: var(--vscode-editorWarning-foreground);
+  --lc-danger: var(--vscode-errorForeground);
+  --lc-link: var(--vscode-textLink-foreground);
+  --lc-focus: var(--vscode-focusBorder);
+  --lc-selection: var(--vscode-editor-selectionBackground);
+
+  --lc-input-bg: var(--vscode-input-background);
+  --lc-input-fg: var(--vscode-input-foreground);
+  --lc-input-border: var(--vscode-input-border, var(--vscode-widget-border, transparent));
+  --lc-placeholder: var(--vscode-input-placeholderForeground);
+
+  --lc-list-active: var(--vscode-list-activeSelectionBackground);
+  --lc-list-active-fg: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+  --lc-badge-bg: var(--vscode-badge-background);
+  --lc-badge-fg: var(--vscode-badge-foreground);
+  --lc-progress: var(--vscode-progressBar-background);
+  --lc-code-bg: var(--vscode-textCodeBlock-background);
+
+  --lc-tooltip-bg: var(--vscode-editorHoverWidget-background);
+  --lc-tooltip-fg: var(--vscode-editorHoverWidget-foreground);
+  --lc-tooltip-border: var(--vscode-editorHoverWidget-border);
+  --lc-overlay: color-mix(in srgb, var(--vscode-editor-background) 60%, transparent);
+  --lc-shadow: var(--vscode-widget-shadow, transparent);
+
+  --lc-scrollbar: var(--vscode-scrollbarSlider-background);
+  --lc-scrollbar-hover: var(--vscode-scrollbarSlider-hoverBackground);
+  --lc-scrollbar-active: var(--vscode-scrollbarSlider-activeBackground);
+
+  --lc-hover: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--lc-fg) 7%, transparent));
+}
+
+/* Views in the side bar sit on the side bar color, not the editor color. */
+body.lc-sidebar {
+  --lc-bg: var(--vscode-sideBar-background);
+}
+
+/*
+  High contrast themes have no fills to tell controls apart, so every control
+  gets the theme's contrast border and the focus ring uses the active border.
+*/
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --lc-border: var(--vscode-contrastBorder);
+  --lc-border-strong: var(--vscode-contrastBorder);
+  --lc-control-border: var(--vscode-contrastBorder);
+  --lc-input-border: var(--vscode-contrastBorder);
+  --lc-tooltip-border: var(--vscode-contrastBorder);
+  --lc-list-active-border: var(--vscode-list-focusOutline, var(--vscode-contrastActiveBorder));
+  --lc-focus: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  --lc-shadow: transparent;
+}

@@ -40,13 +40,16 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "node test/ot.test.js && node --test \"test/conformance/*.test.js\"",
     "test:conformance": "node --test \"test/conformance/*.test.js\"",
     "test:vscode": "node test/vscode/run.js",
     "hub": "node hub/hub.js",
     "loadgen": "node tools/loadgen.mjs",
-    "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package -o dist/",
+    "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package --no-dependencies -o dist/",
     "package:hub": "node tools/package-hub.js",
     "package:all": "npm run package && npm run package:hub"
   },
@@ -174,5 +177,13 @@
         }
       ]
     }
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "svelte": "^5.57.2",
+    "svelte-check": "^4.7.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   }
 }

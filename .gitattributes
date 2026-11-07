@@ -1,4 +1,5 @@
 # Keep line endings stable for scripts regardless of core.autocrlf
 *.sh  text eol=lf
 *.bat text eol=crlf
+*.rs  text eol=lf
 *.png binary

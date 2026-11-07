@@ -1,0 +1,63 @@
+/*
+  LAN Hub app palette. Each color is light-dark(light, dark), so one list serves
+  both schemes: the OS setting picks the scheme, and data-theme="light" or
+  data-theme="dark" on any element forces it for that subtree.
+*/
+:root {
+  color-scheme: light dark;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root {
+  --lc-bg: light-dark(#f5f6f8, #121418);
+  --lc-surface: light-dark(#ffffff, #1a1d23);
+  --lc-surface-2: light-dark(#eef0f3, #22262e);
+  --lc-fg: light-dark(#1a1e24, #e5e8ec);
+  --lc-muted: light-dark(#59616c, #9aa2ad);
+  --lc-border: light-dark(#e1e4e9, #2b3039);
+  --lc-border-strong: light-dark(#c3c9d1, #3d4450);
+  --lc-control-border: transparent;
+
+  --lc-accent: light-dark(#2456d3, #3b6fe0);
+  --lc-accent-hover: light-dark(#1d47b3, #2f62d0);
+  --lc-accent-fg: light-dark(#ffffff, #ffffff);
+  --lc-secondary: light-dark(#eceef2, #2a2f38);
+  --lc-secondary-hover: light-dark(#e1e4e9, #333944);
+  --lc-secondary-fg: light-dark(#1a1e24, #e5e8ec);
+
+  --lc-ok: light-dark(#17794a, #46b97f);
+  --lc-warn: light-dark(#9a5800, #e2a640);
+  --lc-danger: light-dark(#c22d47, #f0707f);
+  --lc-link: light-dark(#2456d3, #7aa2f7);
+  --lc-focus: light-dark(#2456d3, #6f9af5);
+  --lc-selection: light-dark(#2456d32e, #6f9af547);
+
+  --lc-input-bg: light-dark(#ffffff, #15181d);
+  --lc-input-fg: light-dark(#1a1e24, #e5e8ec);
+  --lc-input-border: light-dark(#c9cfd6, #3a414c);
+  --lc-placeholder: light-dark(#6b737e, #8a929d);
+
+  --lc-list-active: light-dark(#2456d31f, #3b6fe042);
+  --lc-list-active-fg: light-dark(#1a1e24, #f2f4f7);
+  --lc-badge-bg: light-dark(#2456d3, #3b6fe0);
+  --lc-badge-fg: light-dark(#ffffff, #ffffff);
+  --lc-progress: light-dark(#2456d3, #6f9af5);
+  --lc-code-bg: light-dark(#f1f3f6, #16191e);
+
+  --lc-tooltip-bg: light-dark(#1f242b, #e9ecf0);
+  --lc-tooltip-fg: light-dark(#f5f6f8, #16191e);
+  --lc-tooltip-border: light-dark(#1f242b, #e9ecf0);
+  --lc-overlay: light-dark(#0e121859, #00000099);
+  --lc-shadow: light-dark(#0e12181f, #00000066);
+
+  --lc-scrollbar: light-dark(#1a1e2433, #e5e8ec2e);
+  --lc-scrollbar-hover: light-dark(#1a1e2459, #e5e8ec52);
+  --lc-scrollbar-active: light-dark(#1a1e2480, #e5e8ec73);
+}
