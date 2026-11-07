@@ -23,7 +23,9 @@ use std::time::{Duration, Instant};
 
 use lanhub_ot::{Component, TextOperation};
 use lanhub_protocol::{FileKind, HistoryBlobBody, HistoryBlobContent, HubMessage};
+use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::config::HistorySettings;
 use crate::project::{Line, LoadedFile, line};
@@ -127,8 +129,37 @@ pub enum Job {
     Checkpoints {
         key: u64,
     },
+    /// Answered after the batch commits.
+    Usage {
+        reply: oneshot::Sender<Option<HistoryUsage>>,
+    },
+    /// A retention pass now, outside the batch transaction.
+    Retain {
+        reply: oneshot::Sender<Option<Result<RetentionReport, String>>>,
+    },
     Limits(Limits),
     Stop,
+}
+
+/// Disk use of a project's history, as the admin screens show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryUsage {
+    /// `history.db` with its WAL and shared-memory files.
+    pub db_bytes: u64,
+    pub blob_bytes: u64,
+    pub blob_count: u64,
+    pub runs: u64,
+}
+
+/// What a retention pass run from the admin screens removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionReport {
+    pub runs_deleted: u64,
+    pub blobs_deleted: u64,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
 }
 
 /// What the history thread asks the actor to send.
@@ -391,6 +422,8 @@ impl Writer {
         let mut out = Vec::new();
         let mut stop = false;
         let mut limits = None;
+        let mut usage = Vec::new();
+        let mut retain = Vec::new();
         if let Err(e) = self.store.conn.execute_batch("BEGIN IMMEDIATE") {
             fail("BEGIN", e);
         }
@@ -398,6 +431,8 @@ impl Writer {
             match job {
                 Job::Stop => stop = true,
                 Job::Limits(l) => limits = Some(l),
+                Job::Usage { reply } => usage.push(reply),
+                Job::Retain { reply } => retain.push(reply),
                 job => self.job(job, &mut out),
             }
         }
@@ -421,7 +456,39 @@ impl Writer {
         } else if self.over_size() {
             self.retention();
         }
+        if !retain.is_empty() {
+            let result = self.run_retention();
+            for reply in retain {
+                let _ = reply.send(Some(result.clone()));
+            }
+        }
+        if !usage.is_empty() {
+            let u = self.usage();
+            for reply in usage {
+                let _ = reply.send(Some(u.clone()));
+            }
+        }
         stop
+    }
+
+    fn usage(&self) -> HistoryUsage {
+        let size =
+            |name: &str| std::fs::metadata(self.store.dir().join(name)).map_or(0, |m| m.len());
+        let blobs = self.store.blobs.scan().unwrap_or_else(|e| {
+            fail("đọc thư mục nội dung", e);
+            Vec::new()
+        });
+        HistoryUsage {
+            db_bytes: size(store::DB_FILE)
+                + size(&format!("{}-wal", store::DB_FILE))
+                + size(&format!("{}-shm", store::DB_FILE)),
+            blob_bytes: blobs.iter().map(|(_, n)| n).sum(),
+            blob_count: blobs.len() as u64,
+            runs: store::run_count(&self.store.conn).unwrap_or_else(|e| {
+                fail("đếm lượt", e);
+                0
+            }),
+        }
     }
 
     /// Stores `c` and returns its hash. `path` names the mirror for `Content::Mirror`.
@@ -628,7 +695,9 @@ impl Writer {
                     line: line(&HubMessage::HistoryBlob { blob, body }),
                 });
             }
-            Job::Limits(_) | Job::Stop => unreachable!("taken by apply"),
+            Job::Limits(_) | Job::Stop | Job::Usage { .. } | Job::Retain { .. } => {
+                unreachable!("taken by apply")
+            }
         }
     }
 
@@ -642,6 +711,10 @@ impl Writer {
     }
 
     fn retention(&mut self) {
+        let _ = self.run_retention();
+    }
+
+    fn run_retention(&mut self) -> Result<RetentionReport, String> {
         self.store.blobs.written = 0;
         match retention::run(&mut self.store, self.limits, now_ms()) {
             Ok(r) => {
@@ -655,11 +728,21 @@ impl Writer {
                         r.bytes_after as f64 / 1_048_576.0
                     ));
                 }
+                let report = RetentionReport {
+                    runs_deleted: r.runs_deleted,
+                    blobs_deleted: r.blobs_deleted,
+                    bytes_before: r.bytes_before,
+                    bytes_after: r.bytes_after,
+                };
                 for path in r.paths {
                     let _ = self.replies.send(Reply::Changed { path });
                 }
+                Ok(report)
             }
-            Err(e) => fail("dọn lịch sử", e),
+            Err(e) => {
+                fail("dọn lịch sử", &e);
+                Err(e)
+            }
         }
     }
 }

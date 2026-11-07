@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 use crate::config::{Config, HubSettings, ProjectConfig, TlsSettings};
 use crate::exclude::{DEFAULT_EXCLUDE, Excluder};
 use crate::files::{is_text, uniform_eol, walk};
+use crate::history::{HistoryUsage, RetentionReport};
 use crate::logs::log_in;
 use crate::project::{ActorMsg, ClientInfo, LoadedFile, Project, ProjectInfo, ProjectStats};
 use crate::router::{self, Router, Table};
@@ -80,6 +81,26 @@ pub struct ProjectStatus {
     pub advertise: bool,
     pub token: String,
     pub started_at: Option<u64>,
+}
+
+/// The invite codes of one project (`Registry::invite_codes`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteCodes {
+    /// The `LC3-` code; `None` when the hub knows no address to put in it.
+    pub code: Option<String>,
+    /// The addresses inside `code`, in the order a client tries them.
+    pub hosts: Vec<String>,
+    pub port: u16,
+    pub tls: bool,
+    /// One `LC-` code per IPv4 address, for 0.1 clients; empty with TLS on.
+    pub legacy: Vec<LegacyInvite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LegacyInvite {
+    pub host: String,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,24 +407,23 @@ impl Registry {
         Ok(())
     }
 
-    /// The invite lines of the Node hub: one legacy `LC-` code per address for 0.1.1 extensions, then one
+    /// The codes members join `cfg` with: one legacy `LC-` code per address for 0.1.1 extensions, then one
     /// `LC3-` code with the public addresses first and every interface address after them. The legacy codes
-    /// are left out with TLS on, which 0.1 clients cannot speak. A machine with no address prints none.
-    fn log_invites(&self, st: &State, cfg: &ProjectConfig) {
+    /// are left out with TLS on, which 0.1 clients cannot speak. A machine with no address has no `LC3-` code.
+    fn invite_set(&self, st: &State, cfg: &ProjectConfig) -> InviteCodes {
         let port = self.port();
         let ips = util::ipv4_addresses();
         let identity = tls_identity(st);
-        if identity.is_none() {
-            for ip in &ips {
-                log_in(
-                    Some(&cfg.name),
-                    &format!(
-                        "Mã mời ({ip}): {}",
-                        invite::encode_v1(*ip, port, &cfg.name, &cfg.token)
-                    ),
-                );
-            }
-        }
+        let legacy = if identity.is_none() {
+            ips.iter()
+                .map(|ip| LegacyInvite {
+                    host: ip.to_string(),
+                    code: invite::encode_v1(*ip, port, &cfg.name, &cfg.token),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut hosts = st.public_address.clone();
         for ip in &ips {
             let ip = ip.to_string();
@@ -411,21 +431,33 @@ impl Registry {
                 hosts.push(ip);
             }
         }
-        if !hosts.is_empty() {
-            log_in(
-                Some(&cfg.name),
-                &format!(
-                    "Mã mời: {}",
-                    invite::encode_v3(
-                        &self.inner.instance_id,
-                        &hosts,
-                        port,
-                        &cfg.name,
-                        &cfg.token,
-                        identity.map(|t| t.fingerprint.as_str())
-                    )
-                ),
-            );
+        let code = (!hosts.is_empty()).then(|| {
+            invite::encode_v3(
+                &self.inner.instance_id,
+                &hosts,
+                port,
+                &cfg.name,
+                &cfg.token,
+                identity.map(|t| t.fingerprint.as_str()),
+            )
+        });
+        InviteCodes {
+            code,
+            hosts,
+            port,
+            tls: identity.is_some(),
+            legacy,
+        }
+    }
+
+    /// The invite lines of the Node hub.
+    fn log_invites(&self, st: &State, cfg: &ProjectConfig) {
+        let codes = self.invite_set(st, cfg);
+        for l in &codes.legacy {
+            log_in(Some(&cfg.name), &format!("Mã mời ({}): {}", l.host, l.code));
+        }
+        if let Some(code) = &codes.code {
+            log_in(Some(&cfg.name), &format!("Mã mời: {code}"));
         }
     }
 
@@ -821,6 +853,25 @@ impl Registry {
     }
 
     pub async fn clients(&self, name: &str) -> Result<Vec<ClientInfo>, AdminError> {
+        self.ask(name, |reply| ActorMsg::Clients { reply }).await
+    }
+
+    pub async fn invite_codes(&self, name: &str) -> Result<InviteCodes, AdminError> {
+        let key = router::key(name);
+        let st = self.inner.state.lock().await;
+        let entry = st
+            .projects
+            .iter()
+            .find(|e| e.key == key)
+            .ok_or_else(|| AdminError::UnknownProject(name.to_owned()))?;
+        Ok(self.invite_set(&st, &entry.cfg))
+    }
+
+    async fn ask<T>(
+        &self,
+        name: &str,
+        msg: impl FnOnce(oneshot::Sender<T>) -> ActorMsg,
+    ) -> Result<T, AdminError> {
         let key = router::key(name);
         let inbox = {
             let st = self.inner.state.lock().await;
@@ -835,11 +886,26 @@ impl Registry {
             }
         };
         let (reply, rx) = oneshot::channel();
-        if inbox.send(ActorMsg::Clients { reply }).await.is_err() {
+        if inbox.send(msg(reply)).await.is_err() {
             return Err(AdminError::NotRunning(name.to_owned()));
         }
         rx.await
             .map_err(|_| AdminError::NotRunning(name.to_owned()))
+    }
+
+    /// Disk use of the project's history; `None` when it runs without history.
+    pub async fn history_usage(&self, name: &str) -> Result<Option<HistoryUsage>, AdminError> {
+        self.ask(name, |reply| ActorMsg::HistoryUsage { reply })
+            .await
+    }
+
+    /// Runs retention now with the project's limits; `None` when it runs without history.
+    pub async fn run_retention(
+        &self,
+        name: &str,
+    ) -> Result<Option<Result<RetentionReport, String>>, AdminError> {
+        self.ask(name, |reply| ActorMsg::RunRetention { reply })
+            .await
     }
 
     /// Stops accepting, writes every pending file of every project and stops their actors.

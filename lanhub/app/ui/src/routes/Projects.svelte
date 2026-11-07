@@ -6,10 +6,11 @@
 
   interface Props {
     onadd: () => void;
+    onimport: () => void;
     onopen: (name: string, tab?: 'settings') => void;
   }
 
-  let { onadd, onopen }: Props = $props();
+  let { onadd, onimport, onopen }: Props = $props();
 
   const projects = $derived(hub.snap?.projects ?? []);
   const running = $derived(projects.filter((p) => p.state === 'running').length);
@@ -26,7 +27,10 @@
       {/if}
     </div>
     {#if projects.length > 0}
-      <Button variant="primary" icon="plus" onclick={onadd} disabled={blocked}>{t('projects.add')}</Button>
+      <div class="head-actions">
+        <Button icon="download" onclick={onimport} disabled={blocked}>{t('projects.import')}</Button>
+        <Button variant="primary" icon="plus" onclick={onadd} disabled={blocked}>{t('projects.add')}</Button>
+      </div>
     {/if}
   </header>
 
@@ -37,6 +41,7 @@
       <EmptyState icon="folder-plus" title={t('projects.emptyTitle')} description={t('projects.emptyText')}>
         {#snippet actions()}
           <Button variant="primary" icon="plus" onclick={onadd} disabled={blocked}>{t('projects.add')}</Button>
+          <Button icon="download" onclick={onimport} disabled={blocked}>{t('projects.import')}</Button>
         {/snippet}
       </EmptyState>
     </div>
@@ -61,6 +66,11 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: var(--lc-space-4);
+  }
+
+  .head-actions {
+    display: flex;
+    gap: var(--lc-space-2);
   }
 
   .titles {

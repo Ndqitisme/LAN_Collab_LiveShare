@@ -187,6 +187,20 @@ fn main() {
             commands::open_folder,
             commands::reload_config,
             commands::tray_action,
+            commands::project_settings,
+            commands::rotate_token,
+            commands::set_allow,
+            commands::set_exclude,
+            commands::preview_exclude,
+            commands::set_history,
+            commands::history_usage,
+            commands::run_retention,
+            commands::invite_codes,
+            commands::project_clients,
+            commands::get_logs,
+            commands::export_logs,
+            commands::scan_legacy,
+            commands::import_legacy,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
