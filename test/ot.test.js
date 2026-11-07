@@ -3,6 +3,7 @@
 // Property tests for the OT core: transform must converge, compose must equal sequential apply.
 const assert = require('assert');
 const { TextOperation, diff, fromChanges, withPrefix, stripPrefix } = require('../lib/ot');
+const { encodeInviteV3, decodeInviteV3, decodeInvite } = require('../lib/common');
 
 function rng(seed) {
   let s = seed >>> 0;
@@ -90,5 +91,30 @@ const del = new TextOperation().retain(1).delete(4).retain(2);
 assert.strictEqual(del.transformIndex(3), 1);
 assert.strictEqual(del.transformIndex(6), 2);
 checks += 6;
+
+// Invite v3 round trip: every address, the port, project, token and TLS fingerprint come back unchanged.
+const ips = ['192.168.1.10', '10.0.0.5', '172.16.4.2', '192.168.56.1', '100.64.0.7', '169.254.10.1', '10.8.0.2', '192.168.137.1'];
+const fp = 'ab'.repeat(32);
+for (const n of [1, 4, 8]) {
+  for (const extra of [{}, { fingerprint: fp }]) {
+    const inv = { instanceId: '0b6f2c7e-6f0e-4c3a-9a51-2f1d8e7c4b10', hosts: ips.slice(0, n), port: 8200, project: 'Dự án A', token: '5f0c9e', ...extra };
+    const code = encodeInviteV3(inv);
+    assert.match(code, /^LC3-[A-Za-z0-9_-]+$/);
+    assert.deepStrictEqual(decodeInviteV3(code), inv);
+    assert.deepStrictEqual(decodeInviteV3(` ${code.slice(0, 20)}\n${code.slice(20)} `), inv, 'whitespace from a chat paste is ignored');
+    checks += 3;
+  }
+}
+const v3 = (j) => `LC3-${Buffer.from(JSON.stringify(j)).toString('base64url')}`;
+const good = { v: 3, i: 'id', a: ['10.0.0.1'], p: 8200, n: 'P', t: '' };
+assert.deepStrictEqual(decodeInviteV3(v3(good)), { instanceId: 'id', hosts: ['10.0.0.1'], port: 8200, project: 'P', token: '' });
+for (const bad of [{ v: 2 }, { a: [] }, { a: '10.0.0.1' }, { p: 0 }, { p: 70000 }, { n: '' }, { i: '' }, { t: 5 }, { f: 'AB:CD' }, { f: 'ab'.repeat(31) }]) {
+  assert.strictEqual(decodeInviteV3(v3({ ...good, ...bad })), null, JSON.stringify(bad));
+}
+for (const bad of ['', 'LC-AQoAAAEAAQAAWA', 'LC3-', 'LC3-!!!', `LC3-${Buffer.from('not json').toString('base64url')}`]) {
+  assert.strictEqual(decodeInviteV3(bad), null, bad);
+}
+assert.strictEqual(decodeInvite(encodeInviteV3({ ...good, instanceId: 'id', hosts: ['10.0.0.1'], project: 'P' })), null, 'v1/v2 decoder ignores v3');
+checks += 17;
 
 console.log(`ot.test.js: ${checks} kiểm tra OK`);

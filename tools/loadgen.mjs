@@ -83,7 +83,7 @@ class Client {
     this.welcomed = new Promise((resolve) => {
       this.ls.on('message', (m) => (m.t === 'welcome' ? resolve() : this.onMessage(m)));
     });
-    this.ls.sock.on('connect', () => this.ls.send({ t: 'hello', proto: C.PROTO, project: 'loadgen', name: `load${index}`, uid: `load${index}` }));
+    this.ls.sock.on('connect', () => this.ls.send({ t: 'hello', proto: C.PROTO_V2, project: 'loadgen', name: `load${index}`, uid: `load${index}` }));
   }
 
   onMessage(m) {

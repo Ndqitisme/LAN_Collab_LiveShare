@@ -21,7 +21,9 @@ function hubCommand() {
   return [process.execPath, path.join(REPO, 'hub', 'hub.js')];
 }
 
-// opts: root, project, token, history, allowFile, exclude (array). Resolves to {port, root, pid, stop()}.
+// opts: root, project, token, history, allowFile, exclude (array), discoveryPort, args (extra CLI arguments).
+// Discovery is off unless discoveryPort is given, so parallel test files never fight over UDP 8201.
+// Resolves to {port, root, pid, logs(), stop()}.
 function startHubProcess(opts) {
   const [cmd, ...pre] = hubCommand();
   const args = [...pre, '--root', opts.root, '--port', '0', '--log-format', 'json', '--stop-on-stdin-close'];
@@ -30,6 +32,9 @@ function startHubProcess(opts) {
   if (opts.history) args.push('--history', opts.history);
   if (opts.allowFile) args.push('--allow-file', opts.allowFile);
   if (opts.exclude && opts.exclude.length) args.push('--exclude', opts.exclude.join(','));
+  if (opts.discoveryPort) args.push('--discovery-port', String(opts.discoveryPort));
+  else args.push('--no-discovery');
+  if (opts.args) args.push(...opts.args);
   const child = spawn(cmd, args, { cwd: REPO, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
   const tail = [];
@@ -83,6 +88,7 @@ function startHubProcess(opts) {
         port,
         root: opts.root,
         pid: child.pid,
+        logs: () => [...tail],
         // Closing stdin asks the hub to write every pending file and exit 0.
         async stop() {
           stopping = true;
@@ -106,7 +112,7 @@ function probeWelcome(port, hello = {}) {
       ls.close();
       reject(new Error('probe: no welcome within 5 s'));
     }, 5000);
-    sock.on('connect', () => ls.send({ t: 'hello', proto: C.PROTO, name: 'probe', uid: `probe-${Math.random()}`, ...hello }));
+    sock.on('connect', () => ls.send({ t: 'hello', proto: C.PROTO_V2, name: 'probe', uid: `probe-${Math.random()}`, ...hello }));
     ls.on('error', () => {});
     ls.on('message', (m) => {
       if (m.t !== 'welcome' && m.t !== 'error') return;

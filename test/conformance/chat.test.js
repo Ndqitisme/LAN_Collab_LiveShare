@@ -49,9 +49,9 @@ function client(port, name, account) {
   const mallory = client(hub.port, 'mallory', { provider: 'github', label: 'mallory' });
   const anon = client(hub.port, 'anon', null);
   await waitFor(() => alice.ready && bob.ready && mallory.fatalMsg && anon.fatalMsg, 5000, 'vào phòng / bị từ chối');
-  assert.strictEqual(mallory.fatalCode, 'account');
+  assert.strictEqual(mallory.fatalCode, 'account_denied');
   assert.match(mallory.fatalMsg, /github:mallory/);
-  assert.strictEqual(anon.fatalCode, 'account');
+  assert.strictEqual(anon.fatalCode, 'account_required');
   assert.ok(!mallory.ready && !anon.ready);
   assert.deepStrictEqual([...alice.users.values()].map((u) => u.account), [{ provider: 'microsoft', label: 'Bob@corp.com' }]);
 

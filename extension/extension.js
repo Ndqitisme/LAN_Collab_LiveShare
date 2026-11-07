@@ -6,10 +6,10 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
-const { CollabClient } = require('../lib/client-core');
+const { CollabClient, renderHubMessage } = require('../lib/client-core');
 const { EditorBinding } = require('../lib/editor-binding');
 const { ChatView } = require('./chat-view');
-const { LineSocket, PROTO, encodeInvite, decodeInvite } = require('../lib/common');
+const { LineSocket, PROTO_V2, encodeInvite, decodeInvite } = require('../lib/common');
 
 let ctx;
 let out;
@@ -119,11 +119,16 @@ function probe(conn) {
       resolve(err);
     };
     const timer = setTimeout(() => done(`hub ${conn.host}:${conn.port} không phản hồi. Kiểm tra hub đang chạy và tường lửa đã mở cổng ${conn.port}.`), 6000);
-    sock.on('connect', () => ls.send({ t: 'hello', probe: true, proto: PROTO, token: conn.token, project: conn.project }));
+    sock.on('connect', () => ls.send({ t: 'hello', probe: true, proto: PROTO_V2, token: conn.token, project: conn.project }));
+    const mine = { project: conn.project, proto: PROTO_V2 };
     ls.on('message', (m) => {
-      if (m && m.t === 'probe-ok') done(null);
-      else if (m && m.t === 'error' && m.code !== 'account') done(m.message);
-      else if (m && m.t === 'error') done(null); // account rules are checked again with the real account
+      if (m && m.t === 'probe_result') {
+        // account rules are checked again with the real account
+        const code = !m.proto_ok ? 'protocol_version' : !m.project_ok ? 'project_unknown' : !m.token_ok ? 'token_invalid' : null;
+        done(code && renderHubMessage(code, { ...m, ...mine }));
+      } else if (m && m.t === 'error') {
+        done(typeof m.message === 'string' ? m.message : renderHubMessage(m.code, { ...m.data, ...mine }));
+      }
     });
     ls.on('error', (e) => done(`không kết nối được ${conn.host}:${conn.port}: ${e.message}`));
   });
@@ -298,7 +303,8 @@ async function startClient() {
   core.on('status', updateStatus);
   core.on('fatal', async (msg, code) => {
     disconnect();
-    const pick = await vscode.window.showErrorMessage(`LAN Collab: ${msg}`, ...(code === 'account' ? ['Dùng tài khoản VS Code'] : []));
+    const accountRefused = code === 'account_required' || code === 'account_denied';
+    const pick = await vscode.window.showErrorMessage(`LAN Collab: ${msg}`, ...(accountRefused ? ['Dùng tài khoản VS Code'] : []));
     if (pick) signIn();
   });
   core.on('chat', (msg) => chatView.onMessage(msg));
