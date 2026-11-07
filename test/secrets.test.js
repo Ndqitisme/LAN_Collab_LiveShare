@@ -1,9 +1,10 @@
 'use strict';
 
 // Token migration from 0.1 (extension/src/connection/secrets.js): both sources, a crash between the write and the
-// delete, an empty source, and a store that does not read back. Run: node test/secrets.test.js
+// delete, an empty source, a store that does not read back, and an open folder that does not use the settings.
+// Run: node test/secrets.test.js
 const assert = require('assert');
-const { migrateTokens, secretKey } = require('../extension/src/connection/secrets');
+const { migrateTokens, secretKey, SETTINGS_KEY } = require('../extension/src/connection/secrets');
 const joins = require('../extension/src/connection/joins');
 
 function memento(initial = {}) {
@@ -33,100 +34,102 @@ function secretStore({ readBack = true } = {}) {
   };
 }
 
-function setting(value) {
-  const s = { value, cleared: 0, failNextClear: false };
-  s.clear = async () => {
+// lanCollab.token at the user and the workspace level.
+function setting({ global = '', workspace = '' } = {}) {
+  const s = { global, workspace, cleared: [], failNextClear: false };
+  const clear = (level) => async () => {
     if (s.failNextClear) {
       s.failNextClear = false;
       throw new Error('crash');
     }
-    s.value = '';
-    s.cleared += 1;
+    s[level] = '';
+    s.cleared.push(level);
   };
+  s.clearGlobal = clear('global');
+  s.clearWorkspace = clear('workspace');
   return s;
 }
 
 const V1_A = { host: '192.168.1.10', port: 8200, project: 'Demo', token: 'tok-a' };
 const V1_B = { host: '10.0.0.5', port: 8300, project: 'Web', token: '' };
-const lines = [];
-const log = (l) => lines.push(l);
+const log = () => {};
 const noToken = (gs) => assert.ok(!JSON.stringify(gs.data.get(joins.KEY) || {}).includes('"token"'), 'no token left in globalState');
+const run = (o) => migrateTokens({ globalState: memento(), secrets: secretStore(), settingsFolderKey: null, setting: setting(), log, ...o });
 
 const cases = [];
 const test = (name, fn) => cases.push({ name, fn });
 
-test('both sources move: joins records become schema 2 and the setting is cleared', async () => {
+test('every source moves: joins records become schema 2, the user and workspace settings are cleared', async () => {
   const gs = memento({ [joins.KEY]: { 'c:\\a': V1_A, 'c:\\b': V1_B } });
   const secrets = secretStore();
-  const st = setting('tok-settings');
-  const moved = await migrateTokens({ globalState: gs, secrets, workspaceKey: 'c:\\s', setting: st, log });
-  assert.strictEqual(moved, 3);
+  const st = setting({ global: 'tok-user', workspace: 'tok-ws' });
+  assert.strictEqual(await run({ globalState: gs, secrets, settingsFolderKey: 'c:\\s', setting: st }), 4);
   assert.strictEqual(secrets.data.get(secretKey('c:\\a')), 'tok-a');
   assert.strictEqual(secrets.data.get(secretKey('c:\\b')), '');
-  assert.strictEqual(secrets.data.get(secretKey('c:\\s')), 'tok-settings');
+  assert.strictEqual(secrets.data.get(secretKey(SETTINGS_KEY)), 'tok-user', 'the user-level token serves every settings folder');
+  assert.strictEqual(secrets.data.get(secretKey('c:\\s')), 'tok-ws');
   assert.deepStrictEqual(gs.data.get(joins.KEY)['c:\\a'], { v: 2, instanceId: null, addresses: ['192.168.1.10'], lastGood: null, port: 8200, project: 'Demo', tlsFingerprint: null });
-  assert.strictEqual(st.value, '');
+  assert.deepStrictEqual([st.global, st.workspace], ['', '']);
   noToken(gs);
+});
+
+test('an open folder that does not use the settings never takes the token', async () => {
+  const secrets = secretStore();
+  const st = setting({ global: 'tok-user', workspace: 'tok-ws' });
+  await run({ secrets, settingsFolderKey: null, setting: st });
+  assert.strictEqual(secrets.data.get(secretKey(SETTINGS_KEY)), 'tok-user');
+  assert.strictEqual(st.workspace, 'tok-ws', 'the workspace value belongs to that workspace and is not its token');
+  assert.deepStrictEqual([...secrets.data.keys()], [secretKey(SETTINGS_KEY)], 'no folder secret was written');
 });
 
 test('a crash between the secret write and the record rewrite converges on rerun', async () => {
   const gs = memento({ [joins.KEY]: { 'c:\\a': V1_A } });
   const secrets = secretStore();
   gs.failNextUpdate = true;
-  await assert.rejects(migrateTokens({ globalState: gs, secrets, workspaceKey: null, setting: setting(''), log }));
+  await assert.rejects(run({ globalState: gs, secrets }));
   assert.strictEqual(secrets.data.get(secretKey('c:\\a')), 'tok-a', 'written before the crash');
   assert.strictEqual(gs.data.get(joins.KEY)['c:\\a'].token, 'tok-a', 'old copy kept: the crash came before the delete');
-  assert.strictEqual(await migrateTokens({ globalState: gs, secrets, workspaceKey: null, setting: setting(''), log }), 1);
+  assert.strictEqual(await run({ globalState: gs, secrets }), 1);
   assert.strictEqual(secrets.data.get(secretKey('c:\\a')), 'tok-a');
   noToken(gs);
-  assert.strictEqual(await migrateTokens({ globalState: gs, secrets, workspaceKey: null, setting: setting(''), log }), 0, 'idempotent');
+  assert.strictEqual(await run({ globalState: gs, secrets }), 0, 'idempotent');
 });
 
 test('a crash before the setting is cleared converges on rerun', async () => {
-  const gs = memento();
   const secrets = secretStore();
-  const st = setting('tok-settings');
+  const st = setting({ global: 'tok-user' });
   st.failNextClear = true;
-  await assert.rejects(migrateTokens({ globalState: gs, secrets, workspaceKey: 'c:\\s', setting: st, log }));
-  assert.strictEqual(st.value, 'tok-settings');
-  await migrateTokens({ globalState: gs, secrets, workspaceKey: 'c:\\s', setting: st, log });
-  assert.strictEqual(st.value, '');
-  assert.strictEqual(secrets.data.get(secretKey('c:\\s')), 'tok-settings');
+  await assert.rejects(run({ secrets, setting: st }));
+  assert.strictEqual(st.global, 'tok-user');
+  await run({ secrets, setting: st });
+  assert.strictEqual(st.global, '');
+  assert.strictEqual(secrets.data.get(secretKey(SETTINGS_KEY)), 'tok-user');
 });
 
 test('an empty source changes nothing', async () => {
   const gs = memento();
   const secrets = secretStore();
-  const st = setting('');
-  assert.strictEqual(await migrateTokens({ globalState: gs, secrets, workspaceKey: 'c:\\s', setting: st, log }), 0);
+  const st = setting();
+  assert.strictEqual(await run({ globalState: gs, secrets, settingsFolderKey: 'c:\\s', setting: st }), 0);
   assert.strictEqual(secrets.data.size, 0);
   assert.strictEqual(gs.data.size, 0);
-  assert.strictEqual(st.cleared, 0);
-});
-
-test('the setting stays when the open folder takes its hub from an invite, or no folder is open', async () => {
-  const gs = memento({ [joins.KEY]: { 'c:\\a': V1_A } });
-  const st = setting('tok-settings');
-  await migrateTokens({ globalState: gs, secrets: secretStore(), workspaceKey: 'c:\\a', setting: st, log });
-  assert.strictEqual(st.value, 'tok-settings', 'that token belongs to folders that use the settings');
-  await migrateTokens({ globalState: memento(), secrets: secretStore(), workspaceKey: null, setting: st, log });
-  assert.strictEqual(st.value, 'tok-settings');
+  assert.deepStrictEqual(st.cleared, []);
 });
 
 test('nothing is deleted when the secret does not read back', async () => {
   const gs = memento({ [joins.KEY]: { 'c:\\a': V1_A } });
-  const st = setting('tok-settings');
-  assert.strictEqual(await migrateTokens({ globalState: gs, secrets: secretStore({ readBack: false }), workspaceKey: 'c:\\s', setting: st, log }), 0);
+  const st = setting({ global: 'tok-user', workspace: 'tok-ws' });
+  assert.strictEqual(await run({ globalState: gs, secrets: secretStore({ readBack: false }), settingsFolderKey: 'c:\\s', setting: st }), 0);
   assert.strictEqual(gs.data.get(joins.KEY)['c:\\a'].token, 'tok-a');
   assert.strictEqual(joins.legacyToken(gs, 'c:\\a'), 'tok-a', 'the connection still finds the old copy');
-  assert.strictEqual(st.value, 'tok-settings');
+  assert.deepStrictEqual([st.global, st.workspace], ['tok-user', 'tok-ws']);
 });
 
 test('schema 2 records are left alone and never gain a token', async () => {
   const rec = { v: 2, instanceId: 'I1', addresses: ['10.0.0.1'], lastGood: '10.0.0.1', port: 8200, project: 'Demo', tlsFingerprint: null };
   const gs = memento({ [joins.KEY]: { 'c:\\a': rec } });
   const secrets = secretStore();
-  assert.strictEqual(await migrateTokens({ globalState: gs, secrets, workspaceKey: null, setting: setting(''), log }), 0);
+  assert.strictEqual(await run({ globalState: gs, secrets }), 0);
   assert.deepStrictEqual(gs.data.get(joins.KEY)['c:\\a'], rec);
   assert.strictEqual(secrets.data.size, 0);
   assert.deepStrictEqual(joins.get(gs, 'c:\\a'), rec);

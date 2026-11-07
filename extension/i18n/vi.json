@@ -19,7 +19,7 @@
 
   "setting.lanCollab.server.description": "Địa chỉ LAN Hub dạng `IP:cổng`, ví dụ `192.168.1.10:8200`. Không cần đặt khi thư mục đã tham gia bằng mã mời.",
   "setting.lanCollab.project.description": "Tên dự án trên LAN Hub. Nên đặt trong `.vscode/settings.json` của dự án.",
-  "setting.lanCollab.token.description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành cho thư mục đang mở và bị xoá khỏi cài đặt.",
+  "setting.lanCollab.token.description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành và bị xoá khỏi cài đặt.",
   "setting.lanCollab.name.description": "Tên hiển thị với thành viên khác. Để trống thì dùng tên tài khoản VS Code, hoặc tài-khoản-Windows@tên-máy khi chưa đăng nhập.",
   "setting.lanCollab.autoConnect.description": "Tự động kết nối khi mở thư mục đã gắn với LAN Hub qua mã mời, hoặc qua lanCollab.server và lanCollab.project.",
   "setting.lanCollab.autoSave.description": "Tự động lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên ổ đĩa của mọi máy luôn cập nhật. Trình chạy, debugger và công cụ AI đều đọc từ ổ đĩa.",

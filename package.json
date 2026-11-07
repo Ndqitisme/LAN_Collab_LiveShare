@@ -150,7 +150,7 @@
         "lanCollab.token": {
           "type": "string",
           "default": "",
-          "description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành cho thư mục đang mở và bị xoá khỏi cài đặt."
+          "description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành và bị xoá khỏi cài đặt."
         },
         "lanCollab.name": {
           "type": "string",

@@ -88,8 +88,10 @@ class ConnectionController {
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: 'unbound' });
       return;
     }
+    // A disconnect keeps the session number (stopped), so the state name is checked too.
+    const current = () => this.state.session === session && this.state.name === 'resolving';
     const [token, account] = await Promise.all([config.tokenFor(this.app.context, folder), getAccount(this.app, false)]);
-    if (this.state.session !== session) return;
+    if (!current()) return;
     const writeError = diagnostics.checkWritable(folder.uri.fsPath, diagnostics.defaultEnv());
     if (writeError) {
       this.app.log(`Không ghi được vào ${folder.uri.fsPath}: ${writeError}`);
@@ -101,12 +103,12 @@ class ConnectionController {
     try {
       won = await this._openSocket();
     } catch (err) {
-      if (this.state.session !== session) return;
+      if (!current()) return;
       this.app.log(`Không kết nối được LAN Hub: ${err.message}`);
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: err.code || 'failed', data: err.data || {} });
       return;
     }
-    if (this.state.session !== session) {
+    if (!current()) {
       won.socket.destroy();
       return;
     }

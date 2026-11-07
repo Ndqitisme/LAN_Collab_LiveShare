@@ -6,9 +6,13 @@
 // between leaves the old copy and the next run finishes the move.
 const joins = require('./joins');
 
+// A user-level lanCollab.token served every folder configured through the settings, so it moves to one shared
+// secret those folders fall back to. A folder key is an absolute path and never equals it.
+const SETTINGS_KEY = 'settings';
+
 const secretKey = (folderKey) => `lanCollab.token:${folderKey}`;
 
-// '' when the folder has no stored token, undefined when none was ever stored.
+// undefined when none was ever stored.
 async function getToken(secrets, folderKey) {
   return secrets.get(secretKey(folderKey));
 }
@@ -22,30 +26,27 @@ async function storeVerified(secrets, folderKey, token) {
   return (await getToken(secrets, folderKey)) === token;
 }
 
-// setting: {value, clear()} for lanCollab.token as the open folder sees it, value '' when unset. It is moved only
-// when the open folder takes its hub from the settings, because only then is it that folder's token.
-async function migrateTokens({ globalState, secrets, workspaceKey, setting, log }) {
+// setting: {global, workspace, clearGlobal(), clearWorkspace()} for lanCollab.token, '' where unset.
+// settingsFolderKey: the open folder's key when it takes its hub from the settings, else null; only then is the
+// workspace-level value that folder's token.
+async function migrateTokens({ globalState, secrets, settingsFolderKey, setting, log }) {
   let moved = 0;
+  const move = async (key, token, clear, what) => {
+    if (!(await storeVerified(secrets, key, token))) {
+      log(`Không chuyển được ${what} vào kho bí mật: đọc lại không khớp. Giữ bản cũ.`);
+      return;
+    }
+    await clear();
+    moved += 1;
+    log(`Đã chuyển ${what} vào kho bí mật (${secretKey(key)}).`);
+  };
   for (const [key, r] of Object.entries(joins.all(globalState))) {
     if (r.v === 2) continue;
-    if (!(await storeVerified(secrets, key, typeof r.token === 'string' ? r.token : ''))) {
-      log(`Không chuyển được token của ${key} vào kho bí mật: đọc lại không khớp. Giữ bản cũ.`);
-      continue;
-    }
-    await joins.put(globalState, key, joins.fromV1(r));
-    moved += 1;
-    log(`Đã chuyển token của ${key} từ lanCollab.joins vào kho bí mật.`);
+    await move(key, typeof r.token === 'string' ? r.token : '', () => joins.put(globalState, key, joins.fromV1(r)), `lanCollab.joins[${key}].token`);
   }
-  if (workspaceKey && !joins.get(globalState, workspaceKey) && setting.value) {
-    if (await storeVerified(secrets, workspaceKey, setting.value)) {
-      await setting.clear();
-      moved += 1;
-      log(`Đã chuyển lanCollab.token vào kho bí mật cho ${workspaceKey} và xoá khỏi cài đặt.`);
-    } else {
-      log(`Không chuyển được lanCollab.token vào kho bí mật: đọc lại không khớp. Giữ bản cũ.`);
-    }
-  }
+  if (setting.global) await move(SETTINGS_KEY, setting.global, setting.clearGlobal, 'lanCollab.token (user)');
+  if (settingsFolderKey && setting.workspace) await move(settingsFolderKey, setting.workspace, setting.clearWorkspace, `lanCollab.token (workspace ${settingsFolderKey})`);
   return moved;
 }
 
-module.exports = { secretKey, getToken, setToken, migrateTokens };
+module.exports = { SETTINGS_KEY, secretKey, getToken, setToken, migrateTokens };

@@ -24,17 +24,16 @@ function connectionFor(ctx, wsFolder) {
   return { source: 'settings', v: 2, instanceId: null, addresses: [host], lastGood: null, port: Number(portText) || 8200, project, tlsFingerprint: null };
 }
 
-// lanCollab.token as this folder sees it, and how to remove it from every level that holds it.
+// lanCollab.token at the user and the workspace level, '' where unset, and how to remove each.
 function tokenSetting(wsFolder) {
   const cfg = vscode.workspace.getConfiguration('lanCollab', wsFolder && wsFolder.uri);
   const info = cfg.inspect('token') || {};
-  const levels = [['globalValue', vscode.ConfigurationTarget.Global], ['workspaceValue', vscode.ConfigurationTarget.Workspace]]
-    .filter(([k]) => typeof info[k] === 'string' && info[k] !== '');
+  const text = (v) => (typeof v === 'string' ? v : '');
   return {
-    value: String(cfg.get('token') || ''),
-    clear: async () => {
-      for (const [, target] of levels) await cfg.update('token', undefined, target);
-    },
+    global: text(info.globalValue),
+    workspace: text(info.workspaceValue),
+    clearGlobal: () => cfg.update('token', undefined, vscode.ConfigurationTarget.Global),
+    clearWorkspace: () => cfg.update('token', undefined, vscode.ConfigurationTarget.Workspace),
   };
 }
 
@@ -45,15 +44,18 @@ async function tokenFor(ctx, wsFolder) {
   if (stored !== undefined) return stored;
   const conn = connectionFor(ctx, wsFolder);
   if (conn && conn.source === 'join') return joins.legacyToken(ctx.globalState, key) || '';
-  return tokenSetting(wsFolder).value;
+  const shared = await secrets.getToken(ctx.secrets, secrets.SETTINGS_KEY);
+  const setting = tokenSetting(wsFolder);
+  return setting.workspace || (shared !== undefined ? shared : setting.global);
 }
 
 function migrateTokens(ctx, log) {
   const folder = workspaceFolder();
+  const conn = folder && connectionFor(ctx, folder);
   return secrets.migrateTokens({
     globalState: ctx.globalState,
     secrets: ctx.secrets,
-    workspaceKey: folder ? folderKey(folder.uri) : null,
+    settingsFolderKey: conn && conn.source === 'settings' ? folderKey(folder.uri) : null,
     setting: tokenSetting(folder),
     log,
   });
@@ -72,8 +74,10 @@ async function updateConnection(ctx, wsFolder, patch) {
   const joined = joins.get(ctx.globalState, key);
   if ('token' in patch) {
     await secrets.setToken(ctx.secrets, key, patch.token);
-    // A value left in the settings would be moved over the new token on the next activation.
-    if (!joined) await tokenSetting(wsFolder).clear();
+    // An old copy left behind would be migrated over the new token on the next activation: the token of a 0.1
+    // record, or this workspace's setting. The user-level setting serves other folders and loses to this secret.
+    if (joined) await joins.put(ctx.globalState, key, joined);
+    else if (tokenSetting(wsFolder).workspace) await tokenSetting(wsFolder).clearWorkspace();
   }
   if (!('project' in patch)) return;
   if (joined) await joins.update(ctx.globalState, key, { project: patch.project });
