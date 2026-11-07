@@ -4,7 +4,9 @@ const vscode = require('vscode');
 const crypto = require('crypto');
 const { CollabClient } = require('../../../lib/client-core');
 const machine = require('../../../lib/connection-machine');
+const diagnostics = require('../../../lib/diagnostics');
 const config = require('../config');
+const joins = require('./joins');
 const { getAccount } = require('./account');
 const { confirmSync } = require('./sync-ui');
 
@@ -19,7 +21,8 @@ class ConnectionController {
     this.state = machine.initial;
     this.core = null;
     this.folder = null;
-    this.resolved = null; // {folder, conn, account, name, exclude} of the current session
+    this.resolved = null; // {folder, conn, token, account, name, exclude} of the current session
+    this.pending = null; // the socket _resolve won, taken by the core's first attempt
     this.watcher = null;
     this.queue = [];
     this.stepping = false;
@@ -62,14 +65,19 @@ class ConnectionController {
     this.state = next;
     const restarted = next.session !== prev.session;
     if (next.name !== prev.name || restarted) this.app.log(`Trạng thái kết nối: ${prev.name} → ${next.name}${next.code !== null ? ` (${next.code})` : ''}`);
+    if (next.name === 'reconnecting' && next.attempt !== prev.attempt) this.app.log(`Thử kết nối lại lần ${next.attempt}.`);
+    if (next.name === 'reconnecting' && next.nextAt && next.nextAt !== prev.nextAt) this.app.log(`Thử kết nối lại sau ${((next.nextAt - Date.now()) / 1000).toFixed(1)} giây.`);
     if (restarted || !machine.WITH_CORE.has(next.name)) this._teardown();
     if (next.name === 'resolving') this._resolve(next.session);
     else if (next.name === 'connecting' && prev.name === 'resolving') this._start(next.session);
     this.changed.fire({ prev, state: next });
   }
 
+  // Steps 1 to 5 of the diagnostics before any core exists: the folder has a hub and is writable, then the race over
+  // every known address with rediscovery and the TLS pin. A failure lands in needs_action with its code.
   async _resolve(session) {
     this.resolved = null;
+    this._dropPending();
     const folder = config.workspaceFolder();
     if (!folder || folder.uri.scheme !== 'file') {
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: 'no_folder' });
@@ -80,15 +88,72 @@ class ConnectionController {
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: 'unbound' });
       return;
     }
-    const account = await getAccount(this.app, false);
+    const [token, account] = await Promise.all([config.tokenFor(this.app.context, folder), getAccount(this.app, false)]);
     if (this.state.session !== session) return;
-    this.resolved = { folder, conn, account, name: config.displayName(account), exclude: config.excludeOf(folder) };
-    this.dispatch({ type: 'RESOLVED', session, target: { host: conn.host, port: conn.port, project: conn.project } });
+    const writeError = diagnostics.checkWritable(folder.uri.fsPath, diagnostics.defaultEnv());
+    if (writeError) {
+      this.app.log(`Không ghi được vào ${folder.uri.fsPath}: ${writeError}`);
+      this.dispatch({ type: 'RESOLVE_FAILED', session, code: 'folder_readonly', data: { path: folder.uri.fsPath } });
+      return;
+    }
+    this.resolved = { folder, conn, token, account, name: config.displayName(account), exclude: config.excludeOf(folder) };
+    let won;
+    try {
+      won = await this._openSocket();
+    } catch (err) {
+      if (this.state.session !== session) return;
+      this.app.log(`Không kết nối được LAN Hub: ${err.message}`);
+      this.dispatch({ type: 'RESOLVE_FAILED', session, code: err.code || 'failed', data: err.data || {} });
+      return;
+    }
+    if (this.state.session !== session) {
+      won.socket.destroy();
+      return;
+    }
+    this.pending = won;
+    this.dispatch({ type: 'RESOLVED', session, target: { host: won.host, port: won.port, project: conn.project } });
+  }
+
+  // The core's socket factory, so every reconnect attempt reruns the race and rediscovery. The invite record is
+  // read again each time: an earlier welcome may have stored a new lastGood or the instanceId.
+  async _openSocket() {
+    const pending = this.pending;
+    if (pending) {
+      this.pending = null;
+      return pending;
+    }
+    const { folder, conn } = this.resolved;
+    const target = conn.source === 'join' ? { ...conn, ...joins.get(this.app.context.globalState, config.folderKey(folder.uri)) } : conn;
+    const won = await diagnostics.resolve(target);
+    if (won.via === 'discovery') this.app.log(`Đã tìm thấy LAN Hub tại địa chỉ mới ${won.host}:${won.port}.`);
+    return won;
+  }
+
+  _dropPending() {
+    if (this.pending) this.pending.socket.destroy();
+    this.pending = null;
+  }
+
+  // A welcome proves the address and gives the hub's instanceId, which folders joined with a 0.1 code lack.
+  async _rememberHub(core, instanceId) {
+    const { folder, conn } = this.resolved;
+    if (conn.source !== 'join') return;
+    const key = config.folderKey(folder.uri);
+    const rec = joins.get(this.app.context.globalState, key);
+    if (!rec) return;
+    const patch = {};
+    if (instanceId && rec.instanceId !== instanceId) patch.instanceId = instanceId;
+    if (rec.lastGood !== core.host) patch.lastGood = core.host;
+    if (rec.port !== core.port) patch.port = core.port;
+    if (!Object.keys(patch).length) return;
+    await joins.update(this.app.context.globalState, key, patch);
+    this.app.log(`Đã lưu LAN Hub của thư mục: ${JSON.stringify(patch)}`);
   }
 
   _start(session) {
-    const { folder, conn, account, name } = this.resolved;
-    const { host, port, project, token } = conn;
+    const { folder, conn, token, account, name } = this.resolved;
+    const { host, port } = this.state.target;
+    const { project } = conn;
     const cfg = vscode.workspace.getConfiguration('lanCollab', folder.uri);
     const ctx = this.app.context;
     const core = new CollabClient({
@@ -109,10 +174,15 @@ class ConnectionController {
       },
       confirmSync: (info) => confirmSync(folder, info),
       log: this.app.log,
+      openSocket: () => this._openSocket(),
+      retryDelay: (n) => diagnostics.backoffDelay(n),
     });
     this.core = core;
     this.folder = folder;
-    core.on('connection', (e) => this.dispatch({ ...e, session }));
+    core.on('connection', (e) => {
+      if (e.type === 'WELCOME') this._rememberHub(core, e.instanceId).catch((err) => this.app.log(`Không lưu được LAN Hub của thư mục: ${err.message}`));
+      this.dispatch({ ...e, session });
+    });
 
     this.watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*'));
     const onDisk = (uri) => core.onDiskEvent(uri.fsPath);
@@ -127,6 +197,7 @@ class ConnectionController {
 
   // Editors let go of their files before the core flushes pending disk writes in disconnect().
   _teardown() {
+    this._dropPending();
     const core = this.core;
     if (!core) return;
     this.core = null;
@@ -146,7 +217,7 @@ class ConnectionController {
     if (RESTART_KEYS.some((k) => e.affectsConfiguration(k, uri))) {
       // The settings editor writes while the member types: wait for the value to settle.
       clearTimeout(this.restartTimer);
-      this.restartTimer = setTimeout(() => this._restartIfChanged(), 1000);
+      this.restartTimer = setTimeout(() => this._restartIfChanged().catch((err) => this.app.log(`[LỖI] áp cấu hình kết nối: ${err.stack || err}`)), 1000);
     }
   }
 
@@ -159,13 +230,17 @@ class ConnectionController {
     this.changed.fire({ prev: this.state, state: this.state });
   }
 
-  _restartIfChanged() {
-    const s = this.state;
-    if (!machine.ACTIVE.has(s.name) && s.name !== 'needs_action') return;
+  async _restartIfChanged() {
+    const settled = () => machine.ACTIVE.has(this.state.name) || this.state.name === 'needs_action';
+    if (!settled()) return;
+    // A token typed into the settings moves to SecretStorage before it is compared.
+    await config.migrateTokens(this.app.context, this.app.log);
     const r = this.resolved;
     const folder = config.workspaceFolder();
     const conn = folder && config.connectionFor(this.app.context, folder);
-    if (r && config.sameConnection(r.conn, conn) && r.exclude === config.excludeOf(folder)) return;
+    const token = conn ? await config.tokenFor(this.app.context, folder) : '';
+    if (!settled()) return;
+    if (r && config.sameConnection(r.conn, conn) && r.token === token && r.exclude === config.excludeOf(folder)) return;
     this.app.log('Cấu hình kết nối đã đổi, kết nối lại.');
     this.dispatch({ type: 'CONFIG_CHANGED' });
   }

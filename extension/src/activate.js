@@ -71,8 +71,11 @@ function activate(context) {
   );
 
   statusBar.render();
-  const first = config.workspaceFolder();
-  if (vscode.workspace.getConfiguration('lanCollab').get('autoConnect') && first && config.connectionFor(context, first)) controller.connect();
+  // Tokens move to SecretStorage before the first connection reads one.
+  config.migrateTokens(context, log).catch((err) => log(`[LỖI] chuyển token vào kho bí mật: ${err.stack || err}`)).then(() => {
+    const first = config.workspaceFolder();
+    if (vscode.workspace.getConfiguration('lanCollab').get('autoConnect') && first && config.connectionFor(context, first)) controller.connect();
+  });
   return { core: () => app.controller.core };
 }
 
