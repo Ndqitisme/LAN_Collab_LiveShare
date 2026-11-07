@@ -51,7 +51,8 @@
     "loadgen": "node tools/loadgen.mjs",
     "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package --no-dependencies -o dist/",
     "package:hub": "node tools/package-hub.js",
-    "package:all": "npm run package && npm run package:hub"
+    "package:all": "npm run package && npm run package:hub",
+    "package:lanhub": "node tools/package-lanhub.mjs"
   },
   "contributes": {
     "commands": [

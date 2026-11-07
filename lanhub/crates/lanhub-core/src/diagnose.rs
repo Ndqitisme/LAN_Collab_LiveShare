@@ -348,7 +348,7 @@ fn port_matches(spec: &str, port: u16) -> bool {
 
 /// Whether the rule covers inbound `protocol` traffic to `port` of the program `exe`. A rule without
 /// `LocalPort` (protocol Any) covers every port.
-fn covers(rule: &FirewallRule, protocol: &str, port: u16, exe: &Path) -> bool {
+pub fn covers(rule: &FirewallRule, protocol: &str, port: u16, exe: &Path) -> bool {
     // netsh prints neither the package (Store apps) nor the user a rule is limited to. Such rules show no
     // program and protocol Any; read literally they would allow or block every port, so they are left out.
     if rule.program.is_none() && rule.protocol.eq_ignore_ascii_case("any") {

@@ -3,11 +3,12 @@
   import { t } from './i18n';
   import { api } from './lib/api';
   import { attempt, cycleTheme, dismiss, hub, theme, toasts } from './lib/state.svelte';
+  import HubSettings from './routes/HubSettings.svelte';
   import ProjectDetail, { type DetailTab } from './routes/ProjectDetail.svelte';
   import ProjectForm from './routes/ProjectForm.svelte';
   import Projects from './routes/Projects.svelte';
 
-  type Route = { view: 'list' } | { view: 'add' } | { view: 'detail'; name: string; tab: DetailTab };
+  type Route = { view: 'list' } | { view: 'add' } | { view: 'detail'; name: string; tab: DetailTab } | { view: 'hub' };
 
   let route = $state<Route>({ view: 'list' });
   let main: HTMLElement | undefined = $state();
@@ -66,6 +67,7 @@
       </div>
     {/if}
     <span class="spacer"></span>
+    <IconButton icon="settings" label={t('hubSettings.open')} pressed={route.view === 'hub'} onclick={() => go({ view: 'hub' })} />
     <IconButton icon={themeIcon} label={themeLabel} onclick={cycleTheme} />
   </header>
 
@@ -98,6 +100,8 @@
     <div class="content">
       {#if route.view === 'list'}
         <Projects onadd={() => go({ view: 'add' })} onopen={(name, tab) => go({ view: 'detail', name, tab: tab ?? 'overview' })} />
+      {:else if route.view === 'hub'}
+        <HubSettings onback={() => go({ view: 'list' })} />
       {:else if route.view === 'add'}
         <section class="page" aria-labelledby="add-title">
           <header class="head">

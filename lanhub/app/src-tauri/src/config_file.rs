@@ -1,14 +1,31 @@
-//! Edits of `lanhub.toml` from the UI. Each edit re-reads the file, changes only the `[[project]]` table it is
-//! about (comments, key order and keys this version does not know stay as written), validates the result
-//! with the same parser the hub uses, and writes it atomically. The caller applies the returned `Config`.
+//! Edits of `lanhub.toml` from the UI. Each edit re-reads the file, changes only the `[[project]]` table or the
+//! `[hub]` keys it is about (comments, key order and keys this version does not know stay as written),
+//! validates the result with the same parser the hub uses, and writes it atomically. The caller applies the
+//! returned `Config`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use lanhub_core::config::{self, Config, ConfigError};
+use lanhub_core::config::{self, Config, ConfigError, HubSettings, TlsSettings};
 use lanhub_core::util::random_hex;
 use serde::{Deserialize, Serialize};
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, value};
+
+/// The fields the hub settings screen edits. An empty `name` leaves the host name; empty `tls_cert` and
+/// `tls_key` mean the self-signed certificate.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HubInput {
+    pub name: String,
+    pub bind: String,
+    pub port: u32,
+    pub discovery: bool,
+    pub discovery_port: u32,
+    pub tls: bool,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub public_address: Vec<String>,
+}
 
 /// The fields the project form edits.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -178,6 +195,84 @@ impl ConfigFile {
         self.commit(&doc)
     }
 
+    /// Writes the `[hub]` keys whose value changes. `check` sees the validated result before anything is
+    /// written, so a port that cannot be opened or a certificate that does not load leaves the file as it was.
+    pub fn update_hub(
+        &self,
+        input: &HubInput,
+        check: impl FnOnce(&Config) -> Result<(), AppError>,
+    ) -> Result<Config, AppError> {
+        let (mut doc, cfg) = self.read_for_edit()?;
+        let new = validate_hub(input)?;
+        let old = &cfg.hub;
+        if !doc.contains_key("hub") {
+            let mut t = Table::new();
+            // Above the `[[project]]` tables, where a hand-written file has it.
+            t.set_position(Some(0));
+            doc.insert("hub", Item::Table(t));
+        }
+        let hub_position = doc["hub"].as_table().and_then(Table::position);
+        let hub = doc["hub"]
+            .as_table_like_mut()
+            .ok_or_else(|| AppError::new("configInvalid"))?;
+        match new.name.as_deref() {
+            None => {
+                hub.remove("name");
+            }
+            Some(n) if old.name.as_deref() != Some(n) => {
+                hub.insert("name", value(n));
+            }
+            Some(_) => {}
+        }
+        if old.bind != new.bind {
+            hub.insert("bind", value(&new.bind));
+        }
+        if old.port != new.port {
+            hub.insert("port", value(i64::from(new.port)));
+        }
+        if old.discovery != new.discovery {
+            hub.insert("discovery", value(new.discovery));
+        }
+        if old.discovery_port != new.discovery_port {
+            hub.insert("discovery_port", value(i64::from(new.discovery_port)));
+        }
+        if new.public_address.is_empty() {
+            hub.remove("public_address");
+        } else if old.public_address != new.public_address {
+            let list: Array = new.public_address.iter().map(String::as_str).collect();
+            hub.insert("public_address", value(list));
+        }
+        if new.tls != old.tls {
+            if !hub.contains_key("tls") {
+                let mut t = Table::new();
+                // Right after `[hub]`: a child table at its parent's position follows the parent.
+                t.set_position(hub_position);
+                hub.insert("tls", Item::Table(t));
+            }
+            let tls = hub
+                .get_mut("tls")
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(|| AppError::new("configInvalid"))?;
+            if old.tls.enabled != new.tls.enabled {
+                tls.insert("enabled", value(new.tls.enabled));
+            }
+            set_path(
+                tls,
+                "cert",
+                old.tls.cert.as_deref(),
+                new.tls.cert.as_deref(),
+            );
+            set_path(tls, "key", old.tls.key.as_deref(), new.tls.key.as_deref());
+        }
+        let text = doc.to_string();
+        let parsed = config::parse(&text, &self.path).map_err(|e| {
+            lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
+            AppError::new("configInvalid")
+        })?;
+        check(&parsed)?;
+        self.commit(&doc)
+    }
+
     pub fn remove_project(&self, name: &str) -> Result<Config, AppError> {
         let (mut doc, cfg) = self.read_for_edit()?;
         let at = position(&cfg, name)?;
@@ -187,6 +282,81 @@ impl ConfigFile {
         }
         self.commit(&doc)
     }
+}
+
+/// Writes `new` unless it names the folder already written; removes the key for `None`.
+fn set_path(t: &mut dyn TableLike, key: &str, old: Option<&Path>, new: Option<&Path>) {
+    match (old, new) {
+        (_, None) => {
+            t.remove(key);
+        }
+        (Some(o), Some(n)) if config::same_path(o, n) => {}
+        (_, Some(n)) => {
+            t.insert(key, value(n.to_string_lossy().as_ref()));
+        }
+    }
+}
+
+/// The settings `input` asks for, or the first problem, named by field.
+fn validate_hub(input: &HubInput) -> Result<HubSettings, AppError> {
+    let name = input.name.trim();
+    if name.chars().any(char::is_control) {
+        return Err(AppError::field("hubNameControl", "name"));
+    }
+    let bind = input.bind.trim();
+    if bind.parse::<std::net::IpAddr>().is_err() {
+        return Err(AppError::field("bindInvalid", "bind"));
+    }
+    let port = |v: u32, field: &'static str| {
+        u16::try_from(v)
+            .ok()
+            .filter(|&p| p > 0)
+            .ok_or_else(|| AppError::field("portInvalid", field))
+    };
+    let tcp = port(input.port, "port")?;
+    let udp = port(input.discovery_port, "discoveryPort")?;
+    let mut public_address: Vec<String> = Vec::new();
+    for a in input.public_address.iter().map(|a| a.trim()) {
+        if a.is_empty() {
+            continue;
+        }
+        // The rule of `config::parse`: one colon is a port, and the invite carries its own.
+        if a.contains(char::is_whitespace) || a.contains('/') || a.matches(':').count() == 1 {
+            return Err(AppError::field("publicAddressInvalid", "publicAddress").param("value", a));
+        }
+        if !public_address.iter().any(|p| p.eq_ignore_ascii_case(a)) {
+            public_address.push(a.to_owned());
+        }
+    }
+    let file = |p: &str| -> Result<Option<PathBuf>, AppError> {
+        let p = p.trim();
+        if p.is_empty() {
+            return Ok(None);
+        }
+        let path = Path::new(p);
+        if !path.is_absolute() || !path.is_file() {
+            return Err(AppError::field("tlsFileMissing", "tls").param("path", p));
+        }
+        Ok(Some(config::normalize(path)))
+    };
+    let (cert, key) = (file(&input.tls_cert)?, file(&input.tls_key)?);
+    if cert.is_some() != key.is_some() {
+        return Err(AppError::field("tlsPair", "tls"));
+    }
+    Ok(HubSettings {
+        name: (!name.is_empty()).then(|| name.to_owned()),
+        bind: bind.to_owned(),
+        port: tcp,
+        discovery: input.discovery,
+        discovery_port: udp,
+        public_address,
+        tls: TlsSettings {
+            enabled: input.tls,
+            cert,
+            key,
+        },
+        state_dir: None,
+    })
 }
 
 /// Keeps the written form (quotes, case) when only the surrounding spaces would change.

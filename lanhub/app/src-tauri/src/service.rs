@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use lanhub_core::admin::{AdminApi, LocalAdmin};
-use lanhub_core::config::{Config, ConfigError};
-use lanhub_core::registry::{ProjectStatus, Registry};
-use lanhub_core::{Hub, identity, invite, logs, util};
+use lanhub_core::config::{Config, ConfigError, HubSettings};
+use lanhub_core::registry::{ProjectState, ProjectStatus, Registry};
+use lanhub_core::{Hub, identity, invite, logs, tls, util};
+use serde::Serialize;
 use tokio::sync::Notify;
 
-use crate::config_file::{AppError, ConfigFile, ProjectInput};
+use crate::config_file::{AppError, ConfigFile, HubInput, ProjectInput};
 use crate::status::Snapshot;
 
 #[derive(Clone)]
@@ -50,6 +51,52 @@ pub struct AppCore {
     /// Woken by project events, so the status view does not wait for its next tick.
     pub wake: Arc<Notify>,
     pub latest: Mutex<Option<Snapshot>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSettingsView {
+    pub name: String,
+    /// What the hub calls itself while `name` is empty.
+    pub hostname: String,
+    pub bind: String,
+    pub port: u16,
+    pub discovery: bool,
+    pub discovery_port: u16,
+    pub tls: bool,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub public_address: Vec<String>,
+    /// SHA-256 of the certificate the hub serves; `None` while TLS is off.
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct InviteView {
+    pub name: String,
+    pub code: String,
+}
+
+/// Refuses settings that the running hub would only log and skip: a port it cannot open, a certificate it
+/// cannot load. `running` is the `[hub]` the hub runs now; unchanged parts are not checked again.
+fn check_hub(new: &HubSettings, running: Option<&HubSettings>) -> Result<(), AppError> {
+    let moved = running.is_none_or(|r| r.bind != new.bind || r.port != new.port);
+    if moved && let Err(e) = std::net::TcpListener::bind((new.bind.as_str(), new.port)) {
+        logs::log_in(
+            None,
+            &format!("[LỖI] Không mở được {}:{}: {e}", new.bind, new.port),
+        );
+        return Err(AppError::field("portBusy", "port").param("port", new.port.to_string()));
+    }
+    let tls_changed = running.is_none_or(|r| r.tls != new.tls || r.state_dir != new.state_dir);
+    if new.tls.enabled
+        && tls_changed
+        && let Err(e) = tls::load_or_create(&new.tls, new.state_dir.as_deref())
+    {
+        logs::log_in(None, &format!("[LỖI] Không bật được TLS: {e}"));
+        return Err(AppError::field("tlsFailed", "tls"));
+    }
+    Ok(())
 }
 
 /// `--config <file>`, then `LANHUB_CONFIG`, then the platform default of the hub.
@@ -191,6 +238,71 @@ impl AppCore {
 
     pub async fn remove_project(&self, name: &str) -> Result<(), AppError> {
         self.edit_with(|f| f.remove_project(name)).await
+    }
+
+    /// Writes and applies the `[hub]` settings. A new port is opened once before the file is written and a
+    /// TLS certificate is loaded (generated the first time), so a failure names its field and changes nothing.
+    pub async fn update_hub(&self, input: &HubInput) -> Result<(), AppError> {
+        let running = self.facts().config.as_ref().map(|c| c.hub.clone());
+        self.edit_with(|f| f.update_hub(input, |cfg| check_hub(&cfg.hub, running.as_ref())))
+            .await
+    }
+
+    /// The `[hub]` settings the hub runs, with the fingerprint of the certificate it serves.
+    pub async fn hub_settings(&self) -> Result<HubSettingsView, AppError> {
+        let hub = self
+            .facts()
+            .config
+            .as_ref()
+            .map(|c| c.hub.clone())
+            .ok_or_else(|| AppError::new("configInvalid"))?;
+        let fingerprint = match self.live() {
+            Some(l) => l.registry.tls_fingerprint().await,
+            None => None,
+        };
+        let path = |p: &Option<PathBuf>| {
+            p.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        Ok(HubSettingsView {
+            name: hub.name.clone().unwrap_or_default(),
+            hostname: util::hostname(),
+            bind: hub.bind.clone(),
+            port: hub.port,
+            discovery: hub.discovery,
+            discovery_port: hub.discovery_port,
+            tls: hub.tls.enabled,
+            tls_cert: path(&hub.tls.cert),
+            tls_key: path(&hub.tls.key),
+            public_address: hub.public_address.clone(),
+            fingerprint,
+        })
+    }
+
+    /// The TCP port the hub listens on (the configured one until it runs) and the discovery port while
+    /// discovery is on: what the firewall has to let in.
+    pub fn ports(&self) -> Option<(u16, Option<u16>)> {
+        let live = self.live().map(|l| l.registry.port());
+        let f = self.facts();
+        let hub = &f.config.as_ref()?.hub;
+        Some((
+            live.unwrap_or(hub.port),
+            hub.discovery.then_some(hub.discovery_port),
+        ))
+    }
+
+    /// The invite code of every running project, in config order.
+    pub async fn invite_codes(&self) -> Result<Vec<InviteView>, AppError> {
+        let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
+        let mut out = Vec::new();
+        for p in live.admin.list_projects().await {
+            if p.state == ProjectState::Running {
+                let code = self.invite_code(&p.name).await?;
+                out.push(InviteView { name: p.name, code });
+            }
+        }
+        Ok(out)
     }
 
     pub async fn inputs(&self) -> Inputs {

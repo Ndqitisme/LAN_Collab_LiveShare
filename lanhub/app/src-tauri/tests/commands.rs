@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lanhub_app::config_file::{ConfigFile, ProjectInput};
+use lanhub_app::config_file::{ConfigFile, HubInput, ProjectInput};
 use lanhub_app::service::AppCore;
 use lanhub_core::registry::ProjectState;
 use lanhub_core::util::random_hex;
@@ -257,4 +257,235 @@ async fn a_file_that_does_not_parse_is_never_overwritten() {
     assert_eq!(e.code, "configInvalid");
     assert_eq!(s.text(), broken);
     core.shutdown().await;
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn hub_input(port: u16) -> HubInput {
+    HubInput {
+        name: String::new(),
+        bind: "127.0.0.1".to_owned(),
+        port: u32::from(port),
+        discovery: false,
+        discovery_port: 8201,
+        tls: false,
+        tls_cert: String::new(),
+        tls_key: String::new(),
+        public_address: Vec::new(),
+    }
+}
+
+fn accepts(port: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+/// The JSON inside an `LC3-` code.
+fn invite_json(code: &str) -> serde_json::Value {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut bits = 0u32;
+    let mut n = 0;
+    let mut out = Vec::new();
+    for c in code.strip_prefix("LC3-").unwrap().bytes() {
+        bits = (bits << 6) | ABC.iter().position(|&a| a == c).unwrap() as u32;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            out.push((bits >> n) as u8);
+        }
+    }
+    serde_json::from_slice(&out).unwrap()
+}
+
+#[tokio::test]
+async fn port_change_moves_the_listener_and_a_busy_port_changes_nothing() {
+    let s = Scratch::new();
+    let web = s.folder("web");
+    let first = free_port();
+    let text = format!("[hub]\nbind = \"127.0.0.1\"\nport = {first}\ndiscovery = false\n");
+    let core = started(&s.config(), &text).await;
+    core.add_project(&input("web", &web)).await.unwrap();
+    assert!(accepts(first));
+
+    let second = free_port();
+    core.update_hub(&hub_input(second)).await.unwrap();
+    assert_eq!(
+        parsed(&s.text())["hub"]["port"].as_integer(),
+        Some(i64::from(second))
+    );
+    assert_eq!(core.inputs().await.port, Some(second));
+    assert!(accepts(second), "the hub accepts on the new port");
+    assert!(!accepts(first), "the old listener is closed");
+    let code = core.invite_code("web").await.unwrap();
+    assert_eq!(invite_json(&code)["p"], u64::from(second));
+
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let busy = taken.local_addr().unwrap().port();
+    let before = s.text();
+    let e = core.update_hub(&hub_input(busy)).await.unwrap_err();
+    assert_eq!(
+        (e.code, e.field, e.params.get("port").cloned()),
+        ("portBusy", Some("port"), Some(busy.to_string()))
+    );
+    assert_eq!(s.text(), before);
+    assert_eq!(core.inputs().await.port, Some(second));
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn hub_settings_write_only_what_changed_and_tls_reaches_the_invite() {
+    let s = Scratch::new();
+    let web = s.folder("web");
+    let port = free_port();
+    let text = format!(
+        "# hand-written\n[hub]\nbind = \"127.0.0.1\" # loopback\nport = {port}\ndiscovery = false\n\n[[project]]\nname = \"web\"\nroot = '{web}'\ntoken = \"abc\"\n"
+    );
+    let core = started(&s.config(), &text).await;
+
+    let mut edit = hub_input(port);
+    edit.name = " Phòng dev ".to_owned();
+    edit.public_address = vec![
+        " hub.example.com ".to_owned(),
+        String::new(),
+        "HUB.example.com".to_owned(),
+        "203.0.113.7".to_owned(),
+    ];
+    edit.tls = true;
+    core.update_hub(&edit).await.unwrap();
+
+    let after = s.text();
+    assert!(
+        after.starts_with("# hand-written\n[hub]\nbind = \"127.0.0.1\" # loopback\n"),
+        "{after}"
+    );
+    let doc = parsed(&after);
+    assert_eq!(doc["hub"]["name"].as_str(), Some("Phòng dev"));
+    assert_eq!(doc["hub"]["tls"]["enabled"].as_bool(), Some(true));
+    assert!(
+        doc["hub"].get("discovery_port").is_none(),
+        "unchanged keys are not written"
+    );
+    assert!(
+        after.find("[hub.tls]").unwrap() < after.find("[[project]]").unwrap(),
+        "{after}"
+    );
+    let view = core.hub_settings().await.unwrap();
+    assert_eq!(view.public_address, ["hub.example.com", "203.0.113.7"]);
+    let fp = view.fingerprint.expect("TLS on shows the fingerprint");
+    assert!(fp.len() == 64 && fp.chars().all(|c| c.is_ascii_hexdigit()));
+    let invite = invite_json(&core.invite_code("web").await.unwrap());
+    assert_eq!(invite["f"], fp.as_str());
+    assert_eq!(invite["a"][0], "hub.example.com");
+    assert_eq!(invite["a"][1], "203.0.113.7");
+
+    // Turning TLS off and clearing the addresses removes their keys; the certificate stays for next time.
+    core.update_hub(&hub_input(port)).await.unwrap();
+    let doc = parsed(&s.text());
+    assert!(doc["hub"].get("name").is_none());
+    assert!(doc["hub"].get("public_address").is_none());
+    assert_eq!(doc["hub"]["tls"]["enabled"].as_bool(), Some(false));
+    assert_eq!(core.hub_settings().await.unwrap().fingerprint, None);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn invalid_hub_settings_name_the_field_and_write_nothing() {
+    let s = Scratch::new();
+    let port = free_port();
+    let text = format!("[hub]\nbind = \"127.0.0.1\"\nport = {port}\ndiscovery = false\n");
+    let core = started(&s.config(), &text).await;
+    let cert = s.dir.join("cert.pem");
+    std::fs::write(&cert, "not a certificate").unwrap();
+    let cert = cert.to_string_lossy().into_owned();
+    let gone = s.dir.join("gone.pem").to_string_lossy().into_owned();
+
+    let with = |f: &dyn Fn(&mut HubInput)| {
+        let mut i = hub_input(port);
+        f(&mut i);
+        i
+    };
+    let cases = [
+        (
+            with(&|i| i.bind = "localhost:80".into()),
+            "bindInvalid",
+            "bind",
+        ),
+        (with(&|i| i.port = 0), "portInvalid", "port"),
+        (with(&|i| i.port = 70000), "portInvalid", "port"),
+        (
+            with(&|i| i.discovery_port = 0),
+            "portInvalid",
+            "discoveryPort",
+        ),
+        (
+            with(&|i| i.public_address = vec!["hub.example.com:8200".into()]),
+            "publicAddressInvalid",
+            "publicAddress",
+        ),
+        (
+            with(&|i| i.public_address = vec!["https://hub.example.com".into()]),
+            "publicAddressInvalid",
+            "publicAddress",
+        ),
+        (with(&|i| i.name = "a\nb".into()), "hubNameControl", "name"),
+        (
+            with(&|i| {
+                i.tls = true;
+                i.tls_cert = cert.clone();
+            }),
+            "tlsPair",
+            "tls",
+        ),
+        (
+            with(&|i| {
+                i.tls = true;
+                i.tls_cert = cert.clone();
+                i.tls_key = gone.clone();
+            }),
+            "tlsFileMissing",
+            "tls",
+        ),
+        (
+            with(&|i| {
+                i.tls = true;
+                i.tls_cert = cert.clone();
+                i.tls_key = cert.clone();
+            }),
+            "tlsFailed",
+            "tls",
+        ),
+    ];
+    for (bad, code, field) in cases {
+        let e = core.update_hub(&bad).await.unwrap_err();
+        assert_eq!((e.code, e.field), (code, Some(field)), "{bad:?}");
+    }
+    assert_eq!(s.text(), text);
+    core.shutdown().await;
+}
+
+#[test]
+fn hub_tables_are_written_above_the_projects() {
+    let s = Scratch::new();
+    let web = s.folder("web");
+    std::fs::write(
+        s.config(),
+        format!("[[project]]\nname = \"web\"\nroot = '{web}'\n"),
+    )
+    .unwrap();
+    let mut edit = hub_input(8300);
+    edit.tls = true;
+    ConfigFile::new(s.config())
+        .update_hub(&edit, |_| Ok(()))
+        .unwrap();
+    let text = s.text();
+    let at = |t: &str| text.find(t).unwrap_or_else(|| panic!("{t} in {text}"));
+    assert!(
+        at("[hub]") < at("[hub.tls]") && at("[hub.tls]") < at("[[project]]"),
+        "{text}"
+    );
 }

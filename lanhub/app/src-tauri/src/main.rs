@@ -5,7 +5,9 @@
 //! stays in the tray when its window closes. The Tauri side lives in this binary; the logic it calls is the
 //! `lanhub_app` library, which does not link Tauri so its tests run without the app manifest.
 
+mod autostart;
 mod commands;
+mod settings;
 mod tray;
 
 use std::sync::Arc;
@@ -164,6 +166,8 @@ fn main() {
     };
     lanhub_core::logs::prefix_project(true);
     let core = Arc::new(AppCore::new(path));
+    // Started at sign-in: the window stays in the tray, as if it had been shown and closed.
+    let hidden = args.iter().any(|a| a == autostart::HIDDEN_FLAG);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -171,9 +175,10 @@ fn main() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(autostart::plugin())
         .manage(core.clone())
         .manage(Quitting(AtomicBool::new(false)))
-        .manage(Shown(AtomicBool::new(false)))
+        .manage(Shown(AtomicBool::new(hidden)))
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::ui_ready,
@@ -187,6 +192,14 @@ fn main() {
             commands::open_folder,
             commands::reload_config,
             commands::tray_action,
+            settings::get_hub_settings,
+            settings::update_hub,
+            settings::invite_codes,
+            settings::pick_file,
+            settings::firewall_status,
+            settings::open_firewall,
+            autostart::get_autostart,
+            autostart::set_autostart,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -211,13 +224,17 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("the LAN Hub window opens");
 
-    app.run(|app, event| {
-        if let RunEvent::ExitRequested { api, .. } = event {
+    app.run(|app, event| match event {
+        RunEvent::ExitRequested { api, .. } => {
             // `quit` exits once every file is written; any other exit request goes through it first.
             if !app.state::<Quitting>().0.load(Ordering::SeqCst) {
                 api.prevent_exit();
                 quit(app.clone());
             }
         }
+        // Also the only event when Windows ends the session (WM_ENDSESSION): the process is killed once this
+        // returns, so every file is written here, before returning. After `quit` it finds nothing left to do.
+        RunEvent::Exit => tauri::async_runtime::block_on(crate::core(app).shutdown()),
+        _ => {}
     });
 }

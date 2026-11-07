@@ -367,7 +367,8 @@ async fn watch(file: &Path, read_at: Option<(SystemTime, u64)>, overrides: &Over
     }
 }
 
-/// Ctrl+C, Ctrl+Break, closing the console, SIGTERM, or (with `--stop-on-stdin-close`) the end of stdin.
+/// Ctrl+C, Ctrl+Break, closing the console, Windows sign-out or shutdown, SIGTERM, or (with
+/// `--stop-on-stdin-close`) the end of stdin.
 /// On Windows a parent process cannot send a catchable SIGINT, so closing stdin is the graceful stop for tests.
 async fn wait_for_stop(stdin: bool) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -383,12 +384,18 @@ async fn wait_for_stop(stdin: bool) {
     #[cfg(windows)]
     {
         use tokio::signal::windows;
+        // Tokio's handler holds the console event until this process exits, so the files are written before
+        // Windows ends it (5 seconds after a close, the session timeout at sign-out or shutdown).
         let (mut brk, mut close) = (windows::ctrl_break().ok(), windows::ctrl_close().ok());
+        let (mut logoff, mut shutdown) =
+            (windows::ctrl_logoff().ok(), windows::ctrl_shutdown().ok());
         tokio::select! {
             _ = ctrl_c => {}
             _ = rx.recv() => {}
             Some(_) = async { match brk.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
             Some(_) = async { match close.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
+            Some(_) = async { match logoff.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
+            Some(_) = async { match shutdown.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
         }
     }
     #[cfg(unix)]

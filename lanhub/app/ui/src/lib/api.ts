@@ -83,3 +83,65 @@ export function onStatus(fn: (s: Snapshot) => void): Promise<UnlistenFn> {
 export function onNotice(fn: (n: Notice) => void): Promise<UnlistenFn> {
   return listen<Notice>('notice', (e) => fn(e.payload));
 }
+
+// Hub settings screen: src-tauri/src/settings.rs, autostart.rs and the shapes of service.rs and firewall.rs.
+
+export interface HubSettingsView {
+  name: string;
+  hostname: string;
+  bind: string;
+  port: number;
+  discovery: boolean;
+  discoveryPort: number;
+  tls: boolean;
+  tlsCert: string;
+  tlsKey: string;
+  publicAddress: string[];
+  fingerprint: string | null;
+}
+
+export type HubInput = Omit<HubSettingsView, 'hostname' | 'fingerprint'>;
+
+/** The form field a hub settings error belongs to. */
+export type HubField = 'name' | 'bind' | 'port' | 'discoveryPort' | 'publicAddress' | 'tls';
+
+export interface InviteView {
+  name: string;
+  code: string;
+}
+
+export type RuleState =
+  | { state: 'present'; rule: string }
+  | { state: 'missing' }
+  | { state: 'disabled' }
+  | { state: 'blocked'; rule: string; program: boolean };
+
+export interface RuleCheck {
+  protocol: 'TCP' | 'UDP';
+  port: number;
+  name: string;
+  state: RuleState;
+}
+
+export interface FirewallReport {
+  rules: RuleCheck[];
+  /** netsh commands without the leading `netsh`. */
+  commands: string[];
+  english: boolean;
+}
+
+export interface FirewallResult {
+  report: FirewallReport;
+  outcome: 'nothing' | 'done' | 'declined' | 'failed';
+}
+
+export const hubApi = {
+  settings: () => invoke<HubSettingsView>('get_hub_settings'),
+  update: (input: HubInput) => invoke<HubSettingsView>('update_hub', { input }),
+  invites: () => invoke<InviteView[]>('invite_codes'),
+  pickFile: (title: string, start: string | null) => invoke<string | null>('pick_file', { title, start }),
+  firewallStatus: () => invoke<FirewallReport>('firewall_status'),
+  openFirewall: () => invoke<FirewallResult>('open_firewall'),
+  autostart: () => invoke<boolean>('get_autostart'),
+  setAutostart: (enabled: boolean) => invoke<boolean>('set_autostart', { enabled }),
+};

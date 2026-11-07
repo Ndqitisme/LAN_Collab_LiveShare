@@ -8,6 +8,7 @@ on:
       - "lib/common.js"
       - "packages/protocol/**"
       - "tools/gen-ot-vectors.mjs"
+      - "tools/package-lanhub.mjs"
       - ".github/workflows/lanhub.yml"
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - "lib/common.js"
       - "packages/protocol/**"
       - "tools/gen-ot-vectors.mjs"
+      - "tools/package-lanhub.mjs"
       - ".github/workflows/lanhub.yml"
 
 jobs:
@@ -53,3 +55,18 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: .
         run: git diff --exit-code packages/protocol/src/generated && test -z "$(git status --porcelain packages/protocol/src/generated)"
+
+  # The Linux lanhub-cli tarball of the release (plan A9); the Windows artifacts come from
+  # `npm run package:lanhub` on Windows.
+  package-linux:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: node tools/package-lanhub.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanhub-cli-linux
+          path: dist/
