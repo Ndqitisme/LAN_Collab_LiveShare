@@ -1,0 +1,43 @@
+name: lanhub
+
+on:
+  push:
+    paths:
+      - "lanhub/**"
+      - "lib/ot.js"
+      - "tools/gen-ot-vectors.mjs"
+      - ".github/workflows/lanhub.yml"
+  pull_request:
+    paths:
+      - "lanhub/**"
+      - "lib/ot.js"
+      - "tools/gen-ot-vectors.mjs"
+      - ".github/workflows/lanhub.yml"
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # lanhub/rust-toolchain.toml pins the Windows GNU host; Linux overrides it.
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            toolchain: stable
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    defaults:
+      run:
+        working-directory: lanhub
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt,clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Vectors match lib/ot.js
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: node tools/gen-ot-vectors.mjs && git diff --exit-code lanhub/crates/lanhub-ot/tests/vectors
