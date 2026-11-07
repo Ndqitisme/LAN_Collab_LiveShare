@@ -3,7 +3,7 @@
   import { Button, Card, Dialog, Input, Switch } from '@lan-collab/ui-kit';
   import { t } from '../i18n';
   import { api, isAppError, type ProjectView } from '../lib/api';
-  import { attempt, errorText, hub, toast } from '../lib/state.svelte';
+  import { attempt, errorText, hub, isRemote, toast } from '../lib/state.svelte';
 
   interface Props {
     /** The project to edit; absent when adding one. */
@@ -28,6 +28,8 @@
   let confirmDelete = $state(false);
   let deleting = $state(false);
 
+  // A remote hub's folder is on its own machine: typed, not picked here.
+  const remote = isRemote();
   const others = $derived((hub.snap?.projects ?? []).filter((p) => p.name.toLowerCase() !== initial?.name.toLowerCase()));
 
   function localNameError(): string | undefined {
@@ -107,7 +109,7 @@
           label={t('form.folder')}
           bind:value={root}
           placeholder={t('form.folderPlaceholder')}
-          hint={t('form.folderHint')}
+          hint={remote ? t('form.folderRemoteHint') : t('form.folderHint')}
           error={rootError}
           oninput={() => serverError?.field === 'root' && (serverError = null)}
           icon="folder"
@@ -116,7 +118,9 @@
           name="root"
           class="grow"
         />
-        <Button icon="folder-open" onclick={pick} class="pick">{t('form.pickFolder')}</Button>
+        {#if !remote}
+          <Button icon="folder-open" onclick={pick} class="pick">{t('form.pickFolder')}</Button>
+        {/if}
       </div>
       <div class="switches">
         <Switch bind:checked={enabled} label={t('form.enabled')} description={t('form.enabledHint')} />

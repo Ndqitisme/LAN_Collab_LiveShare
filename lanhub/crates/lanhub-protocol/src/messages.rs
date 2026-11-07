@@ -541,3 +541,88 @@ pub enum Message {
     Client(ClientMessage),
     Hub(HubMessage),
 }
+
+// The admin channel (docs/protocol.md section 13.3, lanhub only): a connection whose first message is
+// `admin_hello` manages the hub instead of joining a project.
+
+/// Why an `admin_hello` was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AdminRefusal {
+    /// `[hub.admin] remote` is off.
+    Disabled,
+    /// A plain TCP admin connection from an address other than loopback.
+    TlsRequired,
+    TokenInvalid,
+    /// Too many wrong tokens from this address; `retryAfterMs` says when it may try again.
+    RateLimited,
+}
+
+/// A failed admin call. `code` names the failure the way the app's `errors` strings do, `field` the form
+/// field it belongs to, and `params` fill the placeholders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AdminFailure {
+    pub code: String,
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "t", rename_all = "snake_case")]
+#[ts(export, export_to = "AdminMessage.ts")]
+pub enum AdminClientMessage {
+    AdminHello {
+        token: String,
+    },
+    /// `params` is an object, `{}` for a method without parameters.
+    AdminCall {
+        id: u64,
+        method: String,
+        #[serde(default)]
+        #[ts(type = "unknown")]
+        params: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "t", rename_all = "snake_case")]
+#[ts(export, export_to = "AdminMessage.ts")]
+pub enum AdminHubMessage {
+    AdminWelcome {
+        #[serde(rename = "hubName")]
+        hub_name: String,
+        #[serde(rename = "hubVersion")]
+        hub_version: String,
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+        /// The `lanhub.toml` that edits write; `null` when the hub runs from command-line flags and
+        /// refuses edits.
+        #[serde(rename = "configPath")]
+        config_path: Option<String>,
+    },
+    AdminRefused {
+        code: AdminRefusal,
+        #[serde(
+            rename = "retryAfterMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[ts(optional)]
+        retry_after_ms: Option<u64>,
+    },
+    /// The answer to the `admin_call` with the same `id`: `ok` with its `value`, or the `error`.
+    AdminResult {
+        id: u64,
+        ok: bool,
+        #[serde(default)]
+        #[ts(type = "unknown")]
+        value: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<AdminFailure>,
+    },
+}

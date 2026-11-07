@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
+use crate::admin_server::{AdminDoor, Limiter};
 use crate::session::{self, ProjectHandle};
 use crate::tls::TlsIdentity;
 use crate::util::log;
@@ -30,6 +31,8 @@ pub struct Table {
     pub tls: Option<Arc<TlsIdentity>>,
     /// When the hub started (`now_ms`), for the diagnosis page.
     pub started_at: u64,
+    /// Set while `[hub.admin] remote` is on and the hub serves the admin channel.
+    pub admin: Option<Arc<AdminDoor>>,
 }
 
 impl Table {
@@ -41,6 +44,8 @@ impl Table {
 #[derive(Default)]
 pub struct Router {
     table: RwLock<Arc<Table>>,
+    /// Wrong admin tokens per address, kept across table swaps.
+    pub admin_strikes: Limiter,
 }
 
 impl Router {

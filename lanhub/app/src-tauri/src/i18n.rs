@@ -26,3 +26,13 @@ pub fn t(key: &str, params: &[(&str, &str)]) -> String {
     }
     s
 }
+
+/// The key under `errors` named `code`, as a `'static` string, when `vi.json` has it: an error code a remote
+/// hub sends is shown only when this app has words for it.
+pub fn error_code(code: &str) -> Option<&'static str> {
+    strings()
+        .get("errors")?
+        .as_object()?
+        .get_key_value(code)
+        .map(|(k, _)| k.as_str())
+}

@@ -6,27 +6,43 @@ use std::sync::Arc;
 
 use lanhub_app::config_file::{AppError, HubInput};
 use lanhub_app::firewall::{self, Elevation, Protocol, Report};
+use lanhub_app::remote::app_error;
 use lanhub_app::service::{AppCore, HubSettingsView, InviteView};
 use lanhub_core::logs::log_in;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::hubs::Hubs;
+
 type Core<'a> = State<'a, Arc<AppCore>>;
 
 #[tauri::command]
-pub async fn get_hub_settings(core: Core<'_>) -> Result<HubSettingsView, AppError> {
+pub async fn get_hub_settings(core: Core<'_>, hubs: Hubs<'_>) -> Result<HubSettingsView, AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        return remote.hub_settings().await.map_err(app_error);
+    }
     core.hub_settings().await
 }
 
 #[tauri::command]
-pub async fn update_hub(core: Core<'_>, input: HubInput) -> Result<HubSettingsView, AppError> {
+pub async fn update_hub(
+    core: Core<'_>,
+    hubs: Hubs<'_>,
+    input: HubInput,
+) -> Result<HubSettingsView, AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        return remote.update_hub(&input).await.map_err(app_error);
+    }
     core.update_hub(&input).await?;
     core.hub_settings().await
 }
 
 #[tauri::command]
-pub async fn invite_codes(core: Core<'_>) -> Result<Vec<InviteView>, AppError> {
+pub async fn invite_codes(core: Core<'_>, hubs: Hubs<'_>) -> Result<Vec<InviteView>, AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        return remote.invite_codes().await.map_err(app_error);
+    }
     core.invite_codes().await
 }
 

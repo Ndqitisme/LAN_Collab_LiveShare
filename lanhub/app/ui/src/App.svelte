@@ -1,14 +1,20 @@
 <script lang="ts">
-  import { Button, IconButton, StatusDot, Toast } from '@lan-collab/ui-kit';
+  import { Button, Dialog, IconButton, StatusDot, Toast } from '@lan-collab/ui-kit';
   import { t } from './i18n';
-  import { api } from './lib/api';
-  import { attempt, cycleTheme, dismiss, hub, theme, toasts } from './lib/state.svelte';
+  import { api, hubsApi } from './lib/api';
+  import { attempt, cycleTheme, dismiss, errorText, hub, hubs, loadHubs, selectHub, theme, toasts } from './lib/state.svelte';
   import HubSettings from './routes/HubSettings.svelte';
   import ProjectDetail, { type DetailTab } from './routes/ProjectDetail.svelte';
   import ProjectForm from './routes/ProjectForm.svelte';
   import Projects from './routes/Projects.svelte';
+  import RemoteHubs from './routes/RemoteHubs.svelte';
 
-  type Route = { view: 'list' } | { view: 'add' } | { view: 'detail'; name: string; tab: DetailTab } | { view: 'hub' };
+  type Route =
+    | { view: 'list' }
+    | { view: 'add' }
+    | { view: 'detail'; name: string; tab: DetailTab }
+    | { view: 'hub' }
+    | { view: 'remote-add' };
 
   let route = $state<Route>({ view: 'list' });
   let main: HTMLElement | undefined = $state();
@@ -16,6 +22,22 @@
   function go(next: Route) {
     route = next;
     main?.scrollTo({ top: 0 });
+  }
+
+  async function choose(id: string | null) {
+    if (id === (hub.snap?.hubId ?? null) && route.view !== 'remote-add') return;
+    go({ view: 'list' });
+    await attempt(() => selectHub(id));
+  }
+
+  const current = $derived(hubs.view.remotes.find((r) => r.id === hub.snap?.hubId) ?? null);
+  let removing = $state(false);
+
+  async function removeCurrent() {
+    const r = current;
+    if (!r) return;
+    removing = false;
+    if (await attempt(() => hubsApi.remove(r.id).then(loadHubs), ['remote.removed', { name: r.label }])) go({ view: 'list' });
   }
 
   const info = $derived(hub.snap?.hub);
@@ -61,17 +83,34 @@
           {/if}
         {:else if info.state === 'starting'}
           <StatusDot status="connecting" label={t('app.hubStarting')} />
+        {:else if info.state === 'offline'}
+          <StatusDot status="offline" label={t('remote.offline')} />
         {:else}
           <StatusDot status="error" srLabel={t('status.failed')} />
         {/if}
       </div>
     {/if}
     <span class="spacer"></span>
+    {#if current}
+      <IconButton icon="trash-2" label={t('remote.remove')} onclick={() => (removing = true)} />
+    {/if}
     <IconButton icon="settings" label={t('hubSettings.open')} pressed={route.view === 'hub'} onclick={() => go({ view: 'hub' })} />
     <IconButton icon={themeIcon} label={themeLabel} onclick={cycleTheme} />
   </header>
 
-  {#if info?.state === 'bindError' || info?.state === 'configError'}
+  {#if info?.state === 'offline' && hub.snap?.remoteError}
+    <div class="banner" role="alert">
+      <p>
+        {t('remote.offlineTitle', { name: current?.label ?? info.bind })}
+        {errorText(hub.snap.remoteError)}
+        {#if hub.snap.projects.length}<span class="detail plain">{t('remote.lastSeen')}</span>{/if}
+      </p>
+      <div class="banner-actions">
+        <Button size="sm" variant="ghost" icon="trash-2" onclick={() => (removing = true)}>{t('hubError.remove')}</Button>
+        <Button size="sm" icon="refresh-cw" onclick={() => attempt(api.reload)}>{t('remote.retry')}</Button>
+      </div>
+    </div>
+  {:else if info?.state === 'bindError' || info?.state === 'configError'}
     <div class="banner" role="alert">
       <p>
         {#if info.state === 'bindError'}
@@ -96,35 +135,85 @@
     </div>
   {/if}
 
-  <main class="scroll" bind:this={main}>
-    <div class="content">
-      {#if route.view === 'list'}
-        <Projects onadd={() => go({ view: 'add' })} onopen={(name, tab) => go({ view: 'detail', name, tab: tab ?? 'overview' })} />
-      {:else if route.view === 'hub'}
-        <HubSettings onback={() => go({ view: 'list' })} />
-      {:else if route.view === 'add'}
-        <section class="page" aria-labelledby="add-title">
-          <header class="head">
-            <IconButton icon="arrow-left" label={t('detail.back')} onclick={() => go({ view: 'list' })} />
-            <div>
-              <h1 id="add-title">{t('form.addTitle')}</h1>
-              <p class="muted">{t('form.addText')}</p>
-            </div>
-          </header>
-          <ProjectForm ondone={(name) => go(name ? { view: 'detail', name, tab: 'overview' } : { view: 'list' })} oncancel={() => go({ view: 'list' })} />
-        </section>
-      {:else}
-        {@const current = route}
-        <ProjectDetail
-          name={current.name}
-          tab={current.tab}
-          onback={() => go({ view: 'list' })}
-          ontab={(tab) => (route = { ...current, tab })}
-          onsaved={(name) => go(name ? { view: 'detail', name, tab: current.tab } : { view: 'list' })}
-        />
-      {/if}
-    </div>
-  </main>
+  <div class="body">
+    <nav class="hubs" aria-label={t('remote.hubsLabel')}>
+      <ul>
+        <li>
+          <button type="button" class="hub" class:active={!hub.snap?.hubId && route.view !== 'remote-add'} aria-current={!hub.snap?.hubId} onclick={() => choose(null)}>
+            <StatusDot status="live" srLabel={t('status.running')} />
+            <span class="hub-name">{t('remote.local')}</span>
+          </button>
+        </li>
+        {#each hubs.view.remotes as r (r.id)}
+          <li>
+            <button
+              type="button"
+              class="hub"
+              class:active={hub.snap?.hubId === r.id && route.view !== 'remote-add'}
+              aria-current={hub.snap?.hubId === r.id}
+              title={r.address}
+              onclick={() => choose(r.id)}
+            >
+              <StatusDot
+                status={r.online === true ? 'live' : r.online === false ? 'offline' : 'idle'}
+                srLabel={r.online === true ? t('remote.online') : r.online === false ? t('remote.offline') : t('remote.unknown')}
+              />
+              <span class="hub-text">
+                <span class="hub-name">{r.label}</span>
+                <span class="hub-address">{r.address}</span>
+              </span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+      <Button size="sm" variant="ghost" icon="plus" onclick={() => go({ view: 'remote-add' })}>{t('remote.add')}</Button>
+    </nav>
+
+    <main class="scroll" bind:this={main}>
+      <div class="content">
+        {#if route.view === 'remote-add'}
+          <RemoteHubs ondone={() => go({ view: 'list' })} oncancel={() => go({ view: 'list' })} />
+        {:else if route.view === 'list'}
+          <Projects onadd={() => go({ view: 'add' })} onopen={(name, tab) => go({ view: 'detail', name, tab: tab ?? 'overview' })} />
+        {:else if route.view === 'hub'}
+          <HubSettings onback={() => go({ view: 'list' })} />
+        {:else if route.view === 'add'}
+          <section class="page" aria-labelledby="add-title">
+            <header class="head">
+              <IconButton icon="arrow-left" label={t('detail.back')} onclick={() => go({ view: 'list' })} />
+              <div>
+                <h1 id="add-title">{t('form.addTitle')}</h1>
+                <p class="muted">{t('form.addText')}</p>
+              </div>
+            </header>
+            <ProjectForm ondone={(name) => go(name ? { view: 'detail', name, tab: 'overview' } : { view: 'list' })} oncancel={() => go({ view: 'list' })} />
+          </section>
+        {:else}
+          {@const current = route}
+          <ProjectDetail
+            name={current.name}
+            tab={current.tab}
+            onback={() => go({ view: 'list' })}
+            ontab={(tab) => (route = { ...current, tab })}
+            onsaved={(name) => go(name ? { view: 'detail', name, tab: current.tab } : { view: 'list' })}
+          />
+        {/if}
+      </div>
+    </main>
+  </div>
+
+  <Dialog
+    bind:open={removing}
+    title={t('remote.removeConfirm', { name: current?.label ?? '' })}
+    description={t('remote.removeText')}
+    size="sm"
+    closeLabel={t('toast.close')}
+  >
+    {#snippet footer()}
+      <Button variant="ghost" onclick={() => (removing = false)}>{t('remote.cancel')}</Button>
+      <Button variant="danger" icon="trash-2" onclick={removeCurrent}>{t('remote.remove')}</Button>
+    {/snippet}
+  </Dialog>
 
   <div class="toasts" aria-live="polite">
     {#each toasts as item (item.id)}
@@ -229,6 +318,79 @@
     display: flex;
     flex: none;
     gap: var(--lc-space-2);
+  }
+
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .hubs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lc-space-2);
+    flex: none;
+    width: 220px;
+    padding: var(--lc-space-3) var(--lc-space-2);
+    border-right: var(--lc-border-width) solid var(--lc-border);
+    background: var(--lc-surface);
+    overflow-y: auto;
+  }
+
+  .hubs ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lc-space-0);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hub {
+    display: flex;
+    align-items: center;
+    gap: var(--lc-space-2);
+    width: 100%;
+    padding: var(--lc-space-2) var(--lc-space-3);
+    border: 0;
+    border-radius: var(--lc-radius-sm);
+    background: none;
+    color: var(--lc-fg);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--lc-dur-fast) var(--lc-ease);
+  }
+
+  .hub:hover {
+    background: var(--lc-hover);
+  }
+
+  .hub.active {
+    background: color-mix(in srgb, var(--lc-accent) 14%, transparent);
+  }
+
+  .hub-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .hub-name,
+  .hub-address {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hub-address {
+    color: var(--lc-muted);
+    font-family: var(--lc-font-mono);
+    font-size: var(--lc-text-xs);
+  }
+
+  .banner .detail.plain {
+    font-family: inherit;
   }
 
   .scroll {

@@ -11,13 +11,13 @@ use toml::Spanned;
 
 pub const FILE_NAME: &str = "lanhub.toml";
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub hub: HubSettings,
     pub projects: Vec<ProjectConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HubSettings {
     /// `hubName`; the host name when unset.
     pub name: Option<String>,
@@ -29,6 +29,9 @@ pub struct HubSettings {
     /// invite `a` list.
     pub public_address: Vec<String>,
     pub tls: TlsSettings,
+    /// `[hub.admin]`. Never serialized: it holds the admin token's hash.
+    #[serde(skip)]
+    pub admin: AdminSettings,
     /// Where the generated TLS certificate lives: `.lan-collab` next to `lanhub.toml`, or
     /// `<root>/.lan-collab` in single-project mode. `None` only for hand-built configs.
     #[serde(skip)]
@@ -37,7 +40,7 @@ pub struct HubSettings {
 
 /// `[hub.tls]`. With `enabled` and no `cert`, the hub generates a self-signed certificate once into
 /// `HubSettings::state_dir` and reuses it, so its fingerprint stays the same across restarts.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TlsSettings {
     pub enabled: bool,
     /// PEM certificate chain, leaf first. Absolute. Given together with `key`.
@@ -46,7 +49,27 @@ pub struct TlsSettings {
     pub key: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// `[hub.admin]`: the admin channel of docs/protocol.md section 13.3. Only the SHA-256 of the token is
+/// kept, whether the file gives `token` or `token_sha256`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct AdminSettings {
+    pub remote: bool,
+    pub token_sha256: Option<[u8; 32]>,
+}
+
+/// The fewest characters `[hub.admin] token` may have: the admin channel can be reached from the Internet.
+pub const ADMIN_TOKEN_MIN: usize = 16;
+
+impl std::fmt::Debug for AdminSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminSettings")
+            .field("remote", &self.remote)
+            .field("token_sha256", &self.token_sha256.map(|_| "<set>"))
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub name: String,
     /// Absolute.
@@ -100,7 +123,7 @@ impl HistorySettings {
 }
 
 /// Test hooks, honoured by debug builds only.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct DebugHooks {
     /// A message about this path panics inside its handler; the actor recovers.
     pub panic_path: Option<String>,
@@ -136,6 +159,7 @@ impl Default for HubSettings {
             discovery_port: crate::discovery::DEFAULT_PORT,
             public_address: Vec::new(),
             tls: TlsSettings::default(),
+            admin: AdminSettings::default(),
             state_dir: None,
         }
     }
@@ -188,6 +212,7 @@ struct RawHub {
     discovery: bool,
     discovery_port: u16,
     tls: RawTls,
+    admin: RawAdmin,
     public_address: Vec<Spanned<String>>,
 }
 
@@ -201,6 +226,7 @@ impl Default for RawHub {
             discovery: d.discovery,
             discovery_port: d.discovery_port,
             tls: RawTls::default(),
+            admin: RawAdmin::default(),
             public_address: Vec::new(),
         }
     }
@@ -213,6 +239,14 @@ struct RawTls {
     enabled: bool,
     cert: Option<Spanned<String>>,
     key: Option<Spanned<String>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RawAdmin {
+    remote: Option<Spanned<bool>>,
+    token: Option<Spanned<String>>,
+    token_sha256: Option<Spanned<String>>,
 }
 
 #[derive(Deserialize)]
@@ -419,6 +453,8 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
             ));
         }
     };
+    let admin = parse_admin(&h.admin)
+        .map_err(|(span, message)| err(Some(span), Some("hub.admin".into()), message))?;
     Ok(Config {
         hub: HubSettings {
             name: h.name.filter(|n| !n.is_empty()),
@@ -428,6 +464,7 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
             discovery_port: h.discovery_port,
             public_address,
             tls,
+            admin,
             // `.lan-collab` is never synced, so the generated key stays private even when lanhub.toml
             // sits inside a project folder.
             state_dir: Some(
@@ -435,6 +472,49 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
             ),
         },
         projects,
+    })
+}
+
+/// `remote = true` needs exactly one of `token` (at least `ADMIN_TOKEN_MIN` characters) and `token_sha256`
+/// (64 hex characters). A token given while `remote` is off is still checked, so turning it on later
+/// cannot reveal a mistake at a worse moment.
+fn parse_admin(raw: &RawAdmin) -> Result<AdminSettings, (Range<usize>, String)> {
+    let token_sha256 = match (&raw.token, &raw.token_sha256) {
+        (Some(_), Some(h)) => {
+            return Err((h.span(), "give token or token_sha256, not both".into()));
+        }
+        (Some(t), None) => {
+            if t.get_ref().chars().count() < ADMIN_TOKEN_MIN {
+                return Err((
+                    t.span(),
+                    format!("the admin token needs at least {ADMIN_TOKEN_MIN} characters"),
+                ));
+            }
+            Some(crate::admin_server::token_hash(t.get_ref()))
+        }
+        (None, Some(h)) => match crate::util::unhex::<32>(h.get_ref().trim()) {
+            Some(hash) => Some(hash),
+            None => {
+                return Err((
+                    h.span(),
+                    "token_sha256 is 64 hex characters (the SHA-256 of the token)".into(),
+                ));
+            }
+        },
+        (None, None) => None,
+    };
+    let remote = raw.remote.as_ref().filter(|r| *r.get_ref());
+    if let Some(r) = remote
+        && token_sha256.is_none()
+    {
+        return Err((
+            r.span(),
+            "remote = true needs a token or token_sha256".into(),
+        ));
+    }
+    Ok(AdminSettings {
+        remote: remote.is_some(),
+        token_sha256,
     })
 }
 

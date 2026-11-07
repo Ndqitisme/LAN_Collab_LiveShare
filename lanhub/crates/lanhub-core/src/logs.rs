@@ -8,13 +8,13 @@ use std::io::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::{local_time, now_ms};
 
 const KEEP: usize = 2000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Info,
@@ -22,7 +22,7 @@ pub enum Level {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogRecord {
     /// Increases by one per record, so a reader asks for what came after the last one it saw.
     pub seq: u64,

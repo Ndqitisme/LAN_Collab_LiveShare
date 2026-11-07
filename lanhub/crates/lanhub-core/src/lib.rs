@@ -2,9 +2,12 @@
 //! A `Config` (from `lanhub.toml`, or built from the single-project flags) says what runs.
 
 pub mod admin;
+pub mod admin_remote;
+pub mod admin_server;
 pub mod allow;
 pub mod chat;
 pub mod config;
+pub mod config_file;
 pub mod diagnose;
 pub mod discovery;
 pub mod exclude;
@@ -28,7 +31,8 @@ pub mod util;
 use std::path::PathBuf;
 
 use crate::admin::LocalAdmin;
-use crate::config::{Config, HubSettings, ProjectConfig, TlsSettings};
+use crate::admin_server::{AdminSource, HubAdmin};
+use crate::config::{AdminSettings, Config, HubSettings, ProjectConfig, TlsSettings};
 use crate::registry::{ApplyReport, ProjectState, Registry};
 
 pub const HUB_VERSION: &str = concat!("lanhub ", env!("CARGO_PKG_VERSION"));
@@ -55,6 +59,8 @@ pub struct HubConfig {
     pub panic_path: Option<String>,
     /// `--tls`, `--tls-cert`, `--tls-key`. A generated certificate goes into `<root>/.lan-collab`.
     pub tls: TlsSettings,
+    /// `--admin-token`: the admin channel, without edits (there is no file to write).
+    pub admin: AdminSettings,
 }
 
 pub struct Hub {
@@ -83,6 +89,13 @@ impl Hub {
 
     pub fn admin(&self) -> LocalAdmin {
         LocalAdmin::new(self.registry.clone())
+    }
+
+    /// Serves the admin channel of `[hub.admin]` from now on, editing and applying `source`.
+    pub async fn serve_admin(&self, source: AdminSource) {
+        self.registry
+            .set_admin_host(HubAdmin::new(self.registry.clone(), source))
+            .await;
     }
 
     /// Writes every pending file, then stops serving.
@@ -130,12 +143,16 @@ pub async fn start(cfg: HubConfig) -> std::io::Result<Hub> {
             discovery_port: cfg.discovery_port.unwrap_or(discovery::DEFAULT_PORT),
             public_address: Vec::new(),
             tls: cfg.tls,
+            admin: cfg.admin,
             state_dir: Some(root.join(".lan-collab")),
         },
         projects: vec![project],
     };
     let instance_id = identity::load(&root)?.instance_id;
-    let (hub, _) = Hub::start(config, instance_id).await?;
+    let (hub, _) = Hub::start(config.clone(), instance_id).await?;
+    if config.hub.admin.remote {
+        hub.serve_admin(AdminSource::Fixed(config)).await;
+    }
     let failed = hub
         .registry
         .list_projects()

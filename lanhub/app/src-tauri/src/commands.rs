@@ -1,27 +1,38 @@
 //! The Tauri commands the UI calls. Each one is a thin wrapper over `AppCore`, which holds the logic and is
-//! what the tests drive.
+//! what the tests drive, or over the selected remote hub (`hubs`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use lanhub_app::config_file::{AppError, ProjectInput};
+use lanhub_app::remote::app_error;
 use lanhub_app::service::AppCore;
 use lanhub_app::status::{Sampler, Snapshot};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::core;
+use crate::hubs::{Hubs, View, refreshed};
 
 type Core<'a> = State<'a, Arc<AppCore>>;
 
-/// The last snapshot pushed, or a fresh one before the first push.
+/// The last snapshot pushed for the selected hub, or a fresh one before the first push.
 #[tauri::command]
-pub async fn get_status(core: Core<'_>) -> Result<Snapshot, AppError> {
-    let latest = core
-        .latest
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+pub async fn get_status(
+    app: AppHandle,
+    core: Core<'_>,
+    hubs: Hubs<'_>,
+    view: State<'_, View>,
+) -> Result<Snapshot, AppError> {
+    if hubs.selected().is_some() {
+        return Ok(refreshed(&app).await);
+    }
+    let latest = view.get().or_else(|| {
+        core.latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    });
     match latest {
         Some(s) => Ok(s),
         None => Ok(Sampler::default().snapshot(core.inputs().await, core.config_path().to_owned())),
@@ -35,30 +46,62 @@ pub fn ui_ready(app: AppHandle) {
 }
 
 #[tauri::command]
-pub async fn add_project(core: Core<'_>, input: ProjectInput) -> Result<(), AppError> {
+pub async fn add_project(
+    core: Core<'_>,
+    hubs: Hubs<'_>,
+    input: ProjectInput,
+) -> Result<(), AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        remote.add_project(&input).await.map_err(app_error)?;
+        core.wake.notify_one();
+        return Ok(());
+    }
     core.add_project(&input).await
 }
 
 #[tauri::command]
 pub async fn update_project(
     core: Core<'_>,
+    hubs: Hubs<'_>,
     original: String,
     input: ProjectInput,
 ) -> Result<(), AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        remote
+            .update_project(&original, &input)
+            .await
+            .map_err(app_error)?;
+        core.wake.notify_one();
+        return Ok(());
+    }
     core.update_project(&original, &input).await
 }
 
 #[tauri::command]
 pub async fn set_project_enabled(
     core: Core<'_>,
+    hubs: Hubs<'_>,
     name: String,
     enabled: bool,
 ) -> Result<(), AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        remote
+            .set_enabled(&name, enabled)
+            .await
+            .map_err(app_error)?;
+        core.wake.notify_one();
+        return Ok(());
+    }
     core.set_enabled(&name, enabled).await
 }
 
 #[tauri::command]
-pub async fn remove_project(core: Core<'_>, name: String) -> Result<(), AppError> {
+pub async fn remove_project(core: Core<'_>, hubs: Hubs<'_>, name: String) -> Result<(), AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        remote.remove_project(&name).await.map_err(app_error)?;
+        core.wake.notify_one();
+        return Ok(());
+    }
     core.remove_project(&name).await
 }
 
@@ -88,7 +131,11 @@ pub async fn copy_invite_inner(app: &AppHandle, name: &str) -> Result<(), AppErr
 }
 
 #[tauri::command]
-pub async fn copy_invite(app: AppHandle, name: String) -> Result<(), AppError> {
+pub async fn copy_invite(app: AppHandle, hubs: Hubs<'_>, name: String) -> Result<(), AppError> {
+    if let Some(remote) = hubs.selected_admin().await? {
+        let code = remote.invite_code(&name).await.map_err(app_error)?;
+        return crate::copy_text(&app, code);
+    }
     copy_invite_inner(&app, &name).await
 }
 
@@ -126,9 +173,14 @@ pub fn tray_action(app: AppHandle, id: String) {
     }
 }
 
-/// Reads `lanhub.toml` again and applies it; the retry after a config or port error.
+/// Reads `lanhub.toml` again and applies it; the retry after a config or port error. For a remote hub, the
+/// retry after it went offline: connects again now.
 #[tauri::command]
-pub async fn reload_config(core: Core<'_>) -> Result<(), AppError> {
+pub async fn reload_config(app: AppHandle, core: Core<'_>, hubs: Hubs<'_>) -> Result<(), AppError> {
+    if hubs.selected().is_some() {
+        refreshed(&app).await;
+        return Ok(());
+    }
     core.reload().await;
     Ok(())
 }

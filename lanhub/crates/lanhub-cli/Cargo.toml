@@ -8,3 +8,6 @@ publish.workspace = true
 [dependencies]
 lanhub-core = { path = "../lanhub-core" }
 tokio.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Services"] }

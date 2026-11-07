@@ -1,14 +1,22 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use lanhub_core::config::{self, Config, HubSettings, TlsSettings};
+use lanhub_core::admin_server::{AdminSource, token_hash};
+use lanhub_core::config::{self, ADMIN_TOKEN_MIN, AdminSettings, Config, HubSettings, TlsSettings};
+use lanhub_core::config_file::ConfigFile;
 use lanhub_core::diagnose::{self, Status};
 use lanhub_core::{Hub, HubConfig, identity, logs};
 
+#[cfg(windows)]
+mod service;
+
 const USAGE: &str = "Dùng: lanhub-cli [--config lanhub.toml] [--port 8200] [--host 0.0.0.0] [--name TÊN_HUB] [--log-format json] [--stop-on-stdin-close] [--discovery-port 8201] [--no-discovery] [--no-history] [--history-idle-ms N]
   hoặc một dự án: lanhub-cli --root <thư mục dự án> [--project TÊN] [--token BÍ_MẬT] [--history DIR] [--allow-file FILE] [--exclude \"a,b\"] [--tls | --tls-cert CERT.pem --tls-key KEY.pem] cùng các tham số trên
+  dịch vụ Windows: thêm --service vào binPath khi tạo dịch vụ bằng sc.exe
+  quản trị từ xa: thêm --admin-token TOKEN (hoặc biến môi trường LANHUB_ADMIN_TOKEN); lanhub-cli --hash-admin-token TOKEN in giá trị token_sha256 cho [hub.admin]
   tự kiểm tra (chỉ đọc): lanhub-cli --diagnose [--config lanhub.toml | --root <thư mục>] [--port 8200] [--host 0.0.0.0] [--discovery-port 8201] [--no-discovery] [--tls]";
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 const DEBOUNCE: Duration = Duration::from_millis(300);
@@ -51,6 +59,8 @@ struct Overrides {
     crash: Option<(String, String)>,
     no_history: bool,
     history_idle_ms: Option<u64>,
+    /// `--admin-token` or `LANHUB_ADMIN_TOKEN`: remote admin on with this token, whatever `[hub.admin]` says.
+    admin: Option<AdminSettings>,
 }
 
 impl Overrides {
@@ -71,6 +81,9 @@ impl Overrides {
                 hub.discovery_port = p;
             }
             None => {}
+        }
+        if let Some(a) = &self.admin {
+            hub.admin = a.clone();
         }
     }
 
@@ -97,12 +110,50 @@ impl Overrides {
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if argv.iter().any(|a| a == "--service") {
+        return service::dispatch(argv);
+    }
+    run(argv)
+}
+
+fn run(argv: Vec<String>) -> ExitCode {
     if matches!(argv.as_slice(), [flag] if flag == "--version" || flag == "-V") {
         println!("lanhub-cli {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
     let a = parse_args(&argv);
     let value = |k: &str| a.get(k).cloned().flatten().filter(|v| !v.is_empty());
+    if a.contains_key("hash-admin-token") {
+        return match value("hash-admin-token") {
+            Some(t) if t.chars().count() >= ADMIN_TOKEN_MIN => {
+                println!(
+                    "token_sha256 = \"{}\"",
+                    lanhub_core::util::hex(&token_hash(&t))
+                );
+                ExitCode::SUCCESS
+            }
+            _ => {
+                eprintln!("Token quản trị cần ít nhất {ADMIN_TOKEN_MIN} ký tự");
+                ExitCode::from(1)
+            }
+        };
+    }
+    let admin = match value("admin-token").or_else(|| {
+        std::env::var("LANHUB_ADMIN_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty())
+    }) {
+        None => None,
+        Some(t) if t.chars().count() >= ADMIN_TOKEN_MIN => Some(AdminSettings {
+            remote: true,
+            token_sha256: Some(token_hash(&t)),
+        }),
+        Some(_) => {
+            eprintln!("Không mở được hub: token quản trị cần ít nhất {ADMIN_TOKEN_MIN} ký tự");
+            return ExitCode::from(1);
+        }
+    };
     let port = match value("port") {
         None => None,
         Some(p) => match p.parse::<u16>() {
@@ -192,6 +243,7 @@ fn main() -> ExitCode {
             crash,
             no_history,
             history_idle_ms,
+            admin,
         };
         return runtime.block_on(serve_config(file, overrides, json_log, stop_on_stdin_close));
     };
@@ -214,6 +266,7 @@ fn main() -> ExitCode {
         discovery_port: discovery_port.unwrap_or(Some(lanhub_core::discovery::DEFAULT_PORT)),
         panic_path: None,
         tls,
+        admin: admin.unwrap_or_default(),
     };
     runtime.block_on(async move {
         let hub = match lanhub_core::start(cfg).await {
@@ -248,6 +301,7 @@ fn run_diagnose(
         crash: None,
         no_history: false,
         history_idle_ms: None,
+        admin: None,
     };
     let source = match value("root") {
         Some(root) => {
@@ -319,6 +373,13 @@ async fn serve_config(
             return ExitCode::from(1);
         }
     };
+    let overrides = Arc::new(overrides);
+    let adjust = overrides.clone();
+    hub.serve_admin(AdminSource::File {
+        file: ConfigFile::new(file.clone()),
+        adjust: Box::new(move |cfg| adjust.apply(cfg)),
+    })
+    .await;
     if json_log {
         println!("{{\"event\":\"listening\",\"port\":{}}}", hub.port());
     }
@@ -392,6 +453,7 @@ async fn wait_for_stop(stdin: bool) {
         tokio::select! {
             _ = ctrl_c => {}
             _ = rx.recv() => {}
+            _ = service::STOP.notified() => {}
             Some(_) = async { match brk.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
             Some(_) = async { match close.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
             Some(_) = async { match logoff.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}

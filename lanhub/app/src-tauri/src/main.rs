@@ -7,6 +7,7 @@
 
 mod autostart;
 mod commands;
+mod hubs;
 mod settings;
 mod tray;
 
@@ -18,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use lanhub_app::config_file::AppError;
+use lanhub_app::remote::Remotes;
 use lanhub_app::service::{self, AppCore};
 use lanhub_app::status::{self, Sampler};
 
@@ -127,7 +129,8 @@ fn copy_text(app: &AppHandle, text: String) -> Result<(), AppError> {
 }
 
 /// Samples the hub every `status::EVERY`, or sooner after a project event but never twice within that
-/// interval, and pushes the snapshot to the window and the tray when it changed.
+/// interval, and pushes the snapshot to the tray when it changed. The window gets the snapshot of the
+/// selected hub: this one, or a remote hub sampled on the same tick.
 async fn status_loop(app: AppHandle) {
     let core = core(&app);
     let mut sampler = Sampler::default();
@@ -152,8 +155,15 @@ async fn status_loop(app: AppHandle) {
             changed
         };
         if changed {
-            let _ = app.emit(STATUS_EVENT, &snap);
             tray::update(&app, &snap);
+        }
+        match hubs::remotes(&app).selected() {
+            None => hubs::show(&app, &snap),
+            Some(id) => {
+                if let Some(remote) = hubs::remote_snapshot(&app, &id, false).await {
+                    hubs::show(&app, &remote);
+                }
+            }
         }
     }
 }
@@ -165,6 +175,7 @@ fn main() {
         std::process::exit(1);
     };
     lanhub_core::logs::prefix_project(true);
+    let remotes = Arc::new(Remotes::new(&path));
     let core = Arc::new(AppCore::new(path));
     // Started at sign-in: the window stays in the tray, as if it had been shown and closed.
     let hidden = args.iter().any(|a| a == autostart::HIDDEN_FLAG);
@@ -177,6 +188,8 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(autostart::plugin())
         .manage(core.clone())
+        .manage(remotes)
+        .manage(hubs::View::default())
         .manage(Quitting(AtomicBool::new(false)))
         .manage(Shown(AtomicBool::new(hidden)))
         .invoke_handler(tauri::generate_handler![
@@ -200,6 +213,11 @@ fn main() {
             settings::open_firewall,
             autostart::get_autostart,
             autostart::set_autostart,
+            hubs::list_hubs,
+            hubs::select_hub,
+            hubs::probe_remote,
+            hubs::add_remote,
+            hubs::remove_remote,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

@@ -1,4 +1,4 @@
-//! Edits of `lanhub.toml` from the UI. Each edit re-reads the file, changes only the `[[project]]` table or the
+//! Edits of `lanhub.toml` from the app, locally or through the admin channel. Each edit re-reads the file, changes only the `[[project]]` table or the
 //! `[hub]` keys it is about (comments, key order and keys this version does not know stay as written),
 //! validates the result with the same parser the hub uses, and writes it atomically. The caller applies the
 //! returned `Config`.
@@ -6,8 +6,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use lanhub_core::config::{self, Config, ConfigError, HubSettings, TlsSettings};
-use lanhub_core::util::random_hex;
+use crate::config::{self, AdminSettings, Config, ConfigError, HubSettings, TlsSettings};
+use crate::logs;
+use crate::util::{self, random_hex};
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, value};
 
@@ -124,7 +125,7 @@ impl ConfigFile {
 
     fn read_for_edit(&self) -> Result<(DocumentMut, Config), AppError> {
         self.read().map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Không sửa được cấu hình: {e}"));
+            logs::log_in(None, &format!("[LỖI] Không sửa được cấu hình: {e}"));
             AppError::new("configInvalid")
         })
     }
@@ -133,11 +134,11 @@ impl ConfigFile {
     fn commit(&self, doc: &DocumentMut) -> Result<Config, AppError> {
         let text = doc.to_string();
         let cfg = config::parse(&text, &self.path).map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
+            logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
             AppError::new("configInvalid")
         })?;
-        lanhub_core::flush::write_file_atomic(&self.path, text.as_bytes()).map_err(|e| {
-            lanhub_core::logs::log_in(
+        crate::flush::write_file_atomic(&self.path, text.as_bytes()).map_err(|e| {
+            logs::log_in(
                 None,
                 &format!("[LỖI] Không ghi được {}: {e}", self.path.display()),
             );
@@ -266,10 +267,18 @@ impl ConfigFile {
         }
         let text = doc.to_string();
         let parsed = config::parse(&text, &self.path).map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
+            logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
             AppError::new("configInvalid")
         })?;
         check(&parsed)?;
+        self.commit(&doc)
+    }
+
+    /// Writes a new token for the project; its other keys stay as written.
+    pub fn set_token(&self, name: &str, token: &str) -> Result<Config, AppError> {
+        let (mut doc, cfg) = self.read_for_edit()?;
+        let at = position(&cfg, name)?;
+        table_at(&mut doc, at)?.insert("token", value(token));
         self.commit(&doc)
     }
 
@@ -282,6 +291,76 @@ impl ConfigFile {
         }
         self.commit(&doc)
     }
+}
+
+/// The `[hub]` settings as the hub settings screen shows them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSettingsView {
+    pub name: String,
+    /// What the hub calls itself while `name` is empty.
+    pub hostname: String,
+    pub bind: String,
+    pub port: u16,
+    pub discovery: bool,
+    pub discovery_port: u16,
+    pub tls: bool,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub public_address: Vec<String>,
+    /// SHA-256 of the certificate the hub serves; `None` while TLS is off.
+    pub fingerprint: Option<String>,
+}
+
+impl HubSettingsView {
+    pub fn new(hub: &HubSettings, fingerprint: Option<String>) -> HubSettingsView {
+        let path = |p: &Option<PathBuf>| {
+            p.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        HubSettingsView {
+            name: hub.name.clone().unwrap_or_default(),
+            hostname: util::hostname(),
+            bind: hub.bind.clone(),
+            port: hub.port,
+            discovery: hub.discovery,
+            discovery_port: hub.discovery_port,
+            tls: hub.tls.enabled,
+            tls_cert: path(&hub.tls.cert),
+            tls_key: path(&hub.tls.key),
+            public_address: hub.public_address.clone(),
+            fingerprint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InviteView {
+    pub name: String,
+    pub code: String,
+}
+
+/// Refuses settings that the running hub would only log and skip: a port it cannot open, a certificate it
+/// cannot load. `running` is the `[hub]` the hub runs now; unchanged parts are not checked again.
+pub fn check_hub(new: &HubSettings, running: Option<&HubSettings>) -> Result<(), AppError> {
+    let moved = running.is_none_or(|r| r.bind != new.bind || r.port != new.port);
+    if moved && let Err(e) = std::net::TcpListener::bind((new.bind.as_str(), new.port)) {
+        logs::log_in(
+            None,
+            &format!("[LỖI] Không mở được {}:{}: {e}", new.bind, new.port),
+        );
+        return Err(AppError::field("portBusy", "port").param("port", new.port.to_string()));
+    }
+    let tls_changed = running.is_none_or(|r| r.tls != new.tls || r.state_dir != new.state_dir);
+    if new.tls.enabled
+        && tls_changed
+        && let Err(e) = crate::tls::load_or_create(&new.tls, new.state_dir.as_deref())
+    {
+        logs::log_in(None, &format!("[LỖI] Không bật được TLS: {e}"));
+        return Err(AppError::field("tlsFailed", "tls"));
+    }
+    Ok(())
 }
 
 /// Writes `new` unless it names the folder already written; removes the key for `None`.
@@ -355,6 +434,7 @@ fn validate_hub(input: &HubInput) -> Result<HubSettings, AppError> {
             cert,
             key,
         },
+        admin: AdminSettings::default(),
         state_dir: None,
     })
 }

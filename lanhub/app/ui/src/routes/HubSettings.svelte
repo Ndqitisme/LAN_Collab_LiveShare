@@ -12,7 +12,7 @@
     type InviteView,
     type RuleCheck,
   } from '../lib/api';
-  import { attempt, errorText, hub, toast } from '../lib/state.svelte';
+  import { attempt, errorText, hub, isRemote, toast } from '../lib/state.svelte';
 
   interface Props {
     onback: () => void;
@@ -73,13 +73,17 @@
     return firewall;
   }
 
+  // The firewall, sign-in start and file pickers act on this machine, not on a remote hub's.
+  const remote = isRemote();
+
   onMount(() => {
     hubApi.settings().then(fill, (e) => toast('danger', errorText(e)));
+    loadInvites();
+    if (remote) return;
     hubApi.autostart().then(
       (on) => (autostart = on),
       () => (autostart = false),
     );
-    loadInvites();
     checkFirewall();
   });
 
@@ -351,7 +355,9 @@
                     name="tlsCert"
                     class="grow"
                   />
-                  <Button icon="folder-open" onclick={() => pick('cert')} class="pick">{t('hubSettings.pickFile')}</Button>
+                  {#if !remote}
+                    <Button icon="folder-open" onclick={() => pick('cert')} class="pick">{t('hubSettings.pickFile')}</Button>
+                  {/if}
                 </div>
                 <div class="row">
                   <Input
@@ -365,7 +371,9 @@
                     name="tlsKey"
                     class="grow"
                   />
-                  <Button icon="folder-open" onclick={() => pick('key')} class="pick">{t('hubSettings.pickFile')}</Button>
+                  {#if !remote}
+                    <Button icon="folder-open" onclick={() => pick('key')} class="pick">{t('hubSettings.pickFile')}</Button>
+                  {/if}
                 </div>
               {/if}
               {#if tlsError}<p class="note error" role="alert">{tlsError}</p>{/if}
@@ -415,54 +423,56 @@
     </Card>
   {/if}
 
-  <Card title={t('firewall.title')} description={t('firewall.text')}>
-    {#snippet actions()}
-      <Button size="sm" variant="ghost" icon="refresh-cw" loading={checking} onclick={checkFirewall}>{t('firewall.recheck')}</Button>
-    {/snippet}
-    <div class="fields">
-      {#if !firewall}
-        <p class="muted">{t('firewall.checking')}</p>
-      {:else}
-        <ul class="rules">
-          {#each firewall.rules as rule (rule.protocol)}
-            {@const look = ruleLook(rule)}
-            <li>
-              <span class="rule-port">{ruleLabel(rule)}</span>
-              <Badge tone={look.tone} icon={look.tone === 'ok' ? 'circle-check' : 'triangle-alert'}>{look.text}</Badge>
-              {#if look.detail}<span class="muted rule-detail">{look.detail}</span>{/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-      {#if firewall?.commands.length}
-        <div class="open">
-          <Button variant="primary" icon="shield-check" loading={opening} onclick={openFirewall}>{t('firewall.open')}</Button>
-          <span class="note">{t('firewall.openHint')}</span>
-        </div>
-        {#if manual}
-          <div class="manual">
-            <div class="manual-head">
-              <span class="label">{t('firewall.manual')}</span>
-              <Button size="sm" variant="ghost" icon="copy" onclick={() => attempt(() => api.copyText(commandText), ['firewall.commandsCopied'])}>
-                {t('firewall.copyCommands')}
-              </Button>
-            </div>
-            <CodeBlock code={commandText} copyable={false} wrap />
-          </div>
+  {#if !remote}
+    <Card title={t('firewall.title')} description={t('firewall.text')}>
+      {#snippet actions()}
+        <Button size="sm" variant="ghost" icon="refresh-cw" loading={checking} onclick={checkFirewall}>{t('firewall.recheck')}</Button>
+      {/snippet}
+      <div class="fields">
+        {#if !firewall}
+          <p class="muted">{t('firewall.checking')}</p>
+        {:else}
+          <ul class="rules">
+            {#each firewall.rules as rule (rule.protocol)}
+              {@const look = ruleLook(rule)}
+              <li>
+                <span class="rule-port">{ruleLabel(rule)}</span>
+                <Badge tone={look.tone} icon={look.tone === 'ok' ? 'circle-check' : 'triangle-alert'}>{look.text}</Badge>
+                {#if look.detail}<span class="muted rule-detail">{look.detail}</span>{/if}
+              </li>
+            {/each}
+          </ul>
         {/if}
-      {/if}
-    </div>
-  </Card>
+        {#if firewall?.commands.length}
+          <div class="open">
+            <Button variant="primary" icon="shield-check" loading={opening} onclick={openFirewall}>{t('firewall.open')}</Button>
+            <span class="note">{t('firewall.openHint')}</span>
+          </div>
+          {#if manual}
+            <div class="manual">
+              <div class="manual-head">
+                <span class="label">{t('firewall.manual')}</span>
+                <Button size="sm" variant="ghost" icon="copy" onclick={() => attempt(() => api.copyText(commandText), ['firewall.commandsCopied'])}>
+                  {t('firewall.copyCommands')}
+                </Button>
+              </div>
+              <CodeBlock code={commandText} copyable={false} wrap />
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </Card>
 
-  <Card title={t('autostart.title')}>
-    <Switch
-      checked={autostart ?? false}
-      disabled={autostart === null}
-      label={t('autostart.label')}
-      description={t('autostart.hint')}
-      onchange={toggleAutostart}
-    />
-  </Card>
+    <Card title={t('autostart.title')}>
+      <Switch
+        checked={autostart ?? false}
+        disabled={autostart === null}
+        label={t('autostart.label')}
+        description={t('autostart.hint')}
+        onchange={toggleAutostart}
+      />
+    </Card>
+  {/if}
 </section>
 
 <style>

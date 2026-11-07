@@ -411,23 +411,33 @@ async fn registry_admin_api_lists_rotates_and_reports_clients() {
     let clients = admin.clients("p").await.unwrap();
     assert_eq!(clients.len(), 1);
     assert_eq!(clients[0].addr, "127.0.0.1");
-    assert_eq!(admin.list_projects().await[0].clients, 1);
+    assert_eq!(admin.list_projects().await.unwrap()[0].clients, 1);
 
     let token = admin.rotate_token("P").await.unwrap();
     assert_eq!(token.len(), 32);
     let (_, e) = Client::hello(port, "P", "old").await;
     assert_eq!(e.get("code").and_then(Json::as_str), Some("token_invalid"));
     Client::join(port, "P", &token).await;
-    assert_eq!(admin.project_status("P").await.unwrap().token, token);
+    assert_eq!(
+        admin.project_status("P").await.unwrap().unwrap().token,
+        token
+    );
     assert!(admin.rotate_token("nope").await.is_err());
 
-    let logs = admin.logs(0, usize::MAX).await;
+    let logs = admin.logs(0, usize::MAX).await.unwrap();
     assert!(
         logs.iter()
             .any(|r| r.project.as_deref() == Some("P") && r.msg.contains("đã đổi token")),
         "the rotation is in the structured log"
     );
     let last = logs.last().unwrap().seq;
-    assert!(admin.logs(last, 10).await.iter().all(|r| r.seq > last));
+    assert!(
+        admin
+            .logs(last, 10)
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.seq > last)
+    );
     hub.stop().await;
 }

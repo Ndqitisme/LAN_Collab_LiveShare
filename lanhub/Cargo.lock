@@ -2183,9 +2183,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "byteorder",
+ "log",
+ "windows-sys 0.60.2",
+ "zeroize",
+]
+
+[[package]]
 name = "lanhub-app"
 version = "0.2.0"
 dependencies = [
+ "keyring",
  "lanhub-core",
  "serde",
  "serde_json",
@@ -2206,6 +2219,7 @@ version = "0.2.0"
 dependencies = [
  "lanhub-core",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2226,6 +2240,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml 1.2.1+spec-1.1.0",
+ "toml_edit 0.25.17+spec-1.1.0",
  "windows-sys 0.61.2",
  "zstd",
 ]

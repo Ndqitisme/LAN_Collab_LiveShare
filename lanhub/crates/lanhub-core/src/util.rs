@@ -19,6 +19,21 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// `N` bytes from `2 * N` hex digits of either case.
+pub fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    let digits = s.as_bytes();
+    if digits.len() != 2 * N {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (i, pair) in digits.chunks(2).enumerate() {
+        let hi = char::from(pair[0]).to_digit(16)?;
+        let lo = char::from(pair[1]).to_digit(16)?;
+        out[i] = (hi * 16 + lo) as u8;
+    }
+    Some(out)
+}
+
 pub fn random_hex<const N: usize>() -> String {
     hex(&random_bytes::<N>())
 }
