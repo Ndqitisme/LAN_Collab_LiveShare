@@ -6,12 +6,16 @@
 // with --clients members in each, and adds per-project ackRtt and fanout percentiles under "projects".
 // --port P --project NAME drives one project of a hub that is already running (started by the caller), so several
 // loadgen processes can load one multi-project hub without sharing one event loop; hubRssMb is then null.
+// --tls (lanhub from A6) starts the hub with --tls and connects every client over TLS pinned to the fingerprint the
+// hub logs; with --port, --tls <fingerprint> pins the given one. The output then has "tls": true.
 // Usage: node tools/loadgen.mjs [--clients 10] [--rate 20] [--seconds 30] [--seed 1] [--chat 0] [--projects 1]
-//        [--port P --project NAME]
+//        [--port P --project NAME] [--tls [fingerprint]]
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import tls from 'node:tls';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
@@ -25,10 +29,15 @@ const FILE = 'loadgen.txt';
 const DRAIN_MS = 5000;
 
 function parseArgs(argv) {
-  const out = { clients: 10, rate: 20, seconds: 30, seed: 1, chat: 0, projects: 1, port: 0, project: 'loadgen' };
+  const out = { clients: 10, rate: 20, seconds: 30, seed: 1, chat: 0, projects: 1, port: 0, project: 'loadgen', tls: false, fingerprint: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--project') {
       out.project = argv[++i];
+      continue;
+    }
+    if (argv[i] === '--tls') {
+      out.tls = true;
+      if (/^[0-9a-f]{64}$/.test(argv[i + 1] || '')) out.fingerprint = argv[++i];
       continue;
     }
     const m = /^--(clients|rate|seconds|seed|chat|projects|port)$/.exec(argv[i]);
@@ -81,7 +90,7 @@ const fail = (msg) => {
 
 // One member that waits for the ack of its op before sending the next, so it only needs the document length.
 class Client {
-  constructor(index, port, project) {
+  constructor(index, port, project, fingerprint) {
     this.index = index;
     this.project = project;
     this.seq = 0;
@@ -90,14 +99,23 @@ class Client {
     this.pending = null;
     this.sent = 0;
     this.acked = 0;
-    this.ls = new C.LineSocket(net.createConnection({ host: '127.0.0.1', port }));
+    const sock = fingerprint
+      ? tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false })
+      : net.createConnection({ host: '127.0.0.1', port });
+    this.ls = new C.LineSocket(sock);
     this.ls.sock.setNoDelay(true);
     this.ls.on('error', (e) => fail(`client ${index}: ${e.message}`));
     this.ls.on('close', () => this.closing || fail(`client ${index}: hub closed the connection`));
     this.welcomed = new Promise((resolve) => {
       this.ls.on('message', (m) => (m.t === 'welcome' ? resolve() : this.onMessage(m)));
     });
-    this.ls.sock.on('connect', () => this.ls.send({ t: 'hello', proto: C.PROTO_V2, project: project.name, name: `load${index}`, uid: `load${index}` }));
+    this.ls.sock.on(fingerprint ? 'secureConnect' : 'connect', () => {
+      if (fingerprint) {
+        const got = crypto.createHash('sha256').update(sock.getPeerCertificate().raw).digest('hex');
+        if (got !== fingerprint) fail(`client ${index}: certificate fingerprint ${got}, expected ${fingerprint}`);
+      }
+      this.ls.send({ t: 'hello', proto: C.PROTO_V2, project: project.name, name: `load${index}`, uid: `load${index}` });
+    });
   }
 
   onMessage(m) {
@@ -160,12 +178,19 @@ if (args.port) {
   fs.writeFileSync(path.join(root, 'lanhub.toml'), blocks.join('\n'));
   hub = await startHubProcess({ config: path.join(root, 'lanhub.toml') });
 } else {
-  hub = await startHubProcess({ root, project: 'loadgen' });
+  hub = await startHubProcess({ root, project: 'loadgen', args: args.tls ? ['--tls'] : [] });
+}
+let fingerprint = args.fingerprint;
+if (args.tls && !fingerprint) {
+  if (!hub.logs) fail('--tls with --port needs the fingerprint: --tls <hex>');
+  const line = hub.logs().find((l) => /TLS fingerprint SHA256 [0-9a-f]{64}/.test(l));
+  if (!line) fail('the hub logged no TLS fingerprint (does it accept --tls?)');
+  fingerprint = /([0-9a-f]{64})/.exec(line)[1];
 }
 const clients = [];
 for (const p of projects) {
   for (let i = 0; i < args.clients; i++) {
-    const c = new Client(clients.length, hub.port, p);
+    const c = new Client(clients.length, hub.port, p, fingerprint);
     clients.push(c);
     p.clients.push(c);
   }
@@ -231,6 +256,7 @@ console.log(JSON.stringify({
   fanoutP99: percentile(fanout, 99),
   opsPerSec: Math.round((acked / args.seconds) * 10) / 10,
   hubRssMb,
+  ...(fingerprint ? { tls: true } : {}),
   ...(args.projects > 1 ? {
     projects: projects.map((p) => ({
       project: p.name,

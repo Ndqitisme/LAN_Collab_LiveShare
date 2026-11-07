@@ -1,6 +1,7 @@
 //! One connection: a reader task (this one) that frames and parses lines, runs the handshake and forwards
 //! member messages to the project actor, and a writer task that drains a bounded queue to the socket.
 
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -10,18 +11,17 @@ use lanhub_protocol::json::{self, JsStr, Json};
 use lanhub_protocol::{
     Account, HubError, HubMessage, LEGACY_PROTOCOL_LINE, PROTO_MAX, PROTO_MIN, ProbeResult,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::{mpsc, watch};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep_until, timeout_at};
 
 use crate::framing::{LineDecoder, MAX_LINE, PREAUTH_MAX_LINE, Tail};
 use crate::logs::log_in;
 use crate::project::{ActorMsg, JoinRequest, Line, ProjectInfo, line};
 use crate::router::{Router, Table};
 use crate::util::{log, now_ms, random_uuid};
-use crate::{allow, chat};
+use crate::{HUB_VERSION, allow, chat, http_diag, tls};
 
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(5);
@@ -252,11 +252,120 @@ fn is_message(m: &Json) -> bool {
     m.is_object() && m.get("t").and_then(Json::as_js_str).is_some()
 }
 
-pub async fn serve(stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key: u64) {
+/// A new TCP connection. With TLS on, its first byte must open a TLS handshake; a plain one gets
+/// `tls_required` (or the diagnosis page, when it is an HTTP request). The TLS handshake and the first
+/// bytes count toward the hello timeout.
+pub async fn accept(mut stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key: u64) {
     let _ = stream.set_nodelay(true);
     let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(10));
     let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive);
-    let (mut rd, wr) = stream.into_split();
+    let deadline = Instant::now() + HELLO_TIMEOUT;
+    let Some(identity) = router.table().tls.clone() else {
+        let Some(prefix) = first_bytes(&mut stream, &router, deadline).await else {
+            return;
+        };
+        let (rd, wr) = stream.into_split();
+        return serve(rd, wr, prefix, addr, router, key, deadline).await;
+    };
+    let mut first = [0u8; 1];
+    if !matches!(
+        timeout_at(deadline, stream.peek(&mut first)).await,
+        Ok(Ok(1))
+    ) {
+        return;
+    }
+    if first[0] != tls::HANDSHAKE_RECORD {
+        if first_bytes(&mut stream, &router, deadline).await.is_some() {
+            log(format!(
+                "Từ chối {}: kết nối không mã hoá tới hub bật TLS",
+                addr.ip()
+            ));
+            let _ = timeout_at(deadline, async {
+                stream
+                    .write_all(&line(&HubMessage::Error(HubError::TlsRequired {})))
+                    .await?;
+                stream.shutdown().await
+            })
+            .await;
+        }
+        return;
+    }
+    let mut stream = match timeout_at(deadline, identity.acceptor.accept(stream)).await {
+        Ok(Ok(s)) => s,
+        // A client tries every address of an invite at once and drops the losers mid-handshake, and a
+        // client whose pin does not match hangs up; only other failures are worth a line.
+        Ok(Err(e))
+            if matches!(
+                e.kind(),
+                ErrorKind::UnexpectedEof
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+            ) =>
+        {
+            return;
+        }
+        Ok(Err(e)) => {
+            log(format!(
+                "[CẢNH BÁO] {}: bắt tay TLS không thành: {e}",
+                addr.ip()
+            ));
+            return;
+        }
+        Err(_) => return,
+    };
+    let Some(prefix) = first_bytes(&mut stream, &router, deadline).await else {
+        return;
+    };
+    let (rd, wr) = tokio::io::split(stream);
+    serve(rd, wr, prefix, addr, router, key, deadline).await;
+}
+
+/// Reads until the first bytes tell an HTTP request from a protocol client. An HTTP request gets the
+/// diagnosis page here and `None` comes back, as it does when the peer goes quiet or away; otherwise the
+/// bytes read so far, which the session takes as its first chunk.
+async fn first_bytes<S: AsyncRead + AsyncWrite + Unpin>(
+    s: &mut S,
+    router: &Router,
+    deadline: Instant,
+) -> Option<Vec<u8>> {
+    let mut prefix = Vec::new();
+    let mut buf = vec![0u8; READ_CHUNK];
+    loop {
+        match http_diag::sniff(&prefix) {
+            http_diag::Sniff::Other => return Some(prefix),
+            http_diag::Sniff::Http(method) => {
+                let table = router.table();
+                let facts = http_diag::PageFacts {
+                    hub_name: &table.hub_name,
+                    hub_version: HUB_VERSION,
+                    uptime_ms: now_ms().saturating_sub(table.started_at),
+                    projects: &table.advertised,
+                    tls_fingerprint: table.tls.as_ref().map(|t| t.fingerprint.as_str()),
+                };
+                http_diag::serve(s, prefix, method, &facts, deadline).await;
+                return None;
+            }
+            http_diag::Sniff::NeedMore => {}
+        }
+        match timeout_at(deadline, s.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => prefix.extend_from_slice(&buf[..n]),
+            _ => return None,
+        }
+    }
+}
+
+async fn serve<R, W>(
+    mut rd: R,
+    wr: W,
+    prefix: Vec<u8>,
+    addr: SocketAddr,
+    router: Arc<Router>,
+    key: u64,
+    deadline: Instant,
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let (tx, rx) = mpsc::unbounded_channel::<Line>();
     let (close_tx, mut close_rx) = watch::channel(false);
     let conn = Conn {
@@ -268,11 +377,16 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key
 
     let mut dec = LineDecoder::new(PREAUTH_MAX_LINE);
     let mut joined: Option<ProjectHandle> = None;
-    let deadline = Instant::now() + HELLO_TIMEOUT;
     let mut last_keepalive: Option<Instant> = None;
     let mut buf = vec![0u8; READ_CHUNK];
+    let mut pending = Some(prefix);
     'conn: loop {
-        let n = tokio::select! {
+        let owned: Vec<u8>;
+        let chunk: &[u8] = if let Some(p) = pending.take() {
+            owned = p;
+            &owned
+        } else {
+            let n = tokio::select! {
             biased;
             _ = closed(&mut close_rx) => break,
             _ = sleep_until(deadline), if joined.is_none() => {
@@ -288,8 +402,10 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             },
+            };
+            &buf[..n]
         };
-        for raw in dec.push(&buf[..n]) {
+        for raw in dec.push(chunk) {
             let parsed = json::parse(&raw);
             if let Some(project) = &joined {
                 if let Some(m) = parsed.ok().filter(is_message)
@@ -351,8 +467,8 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key
 
 /// Writes queued lines, several at a time when they are small. Ends when every sender is gone (after the
 /// queue drains, then a FIN), or at once when the connection is closed.
-async fn write_loop(
-    mut wr: OwnedWriteHalf,
+async fn write_loop<W: AsyncWrite + Unpin>(
+    mut wr: W,
     mut rx: mpsc::UnboundedReceiver<Line>,
     backlog: Arc<Backlog>,
     close: Arc<watch::Sender<bool>>,

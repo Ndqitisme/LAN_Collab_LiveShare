@@ -165,12 +165,35 @@ fn config_error_names_file_line_column_and_key() {
     let e = err("[hub]\nprot = 1\n");
     assert_eq!((e.line, e.key.as_deref()), (2, Some("prot")), "{e}");
 
-    let e = err("[hub.tls]\nenabled = true\n");
+    let e = err("[hub.tls]\nenabled = true\ncert = \"hub.pem\"\n");
+    assert_eq!((e.line, e.key.as_deref()), (3, Some("hub.tls")), "{e}");
+
+    let e = err("[hub]\npublic_address = [\"ok.example.com\", \"http://x\"]\n");
     assert_eq!(
         (e.line, e.key.as_deref()),
-        (2, Some("hub.tls.enabled")),
+        (2, Some("public_address")),
         "{e}"
     );
+}
+
+#[test]
+fn config_reads_tls() {
+    let c = config::parse("[hub.tls]\nenabled = true\n", &file()).unwrap();
+    assert!(c.hub.tls.enabled);
+    assert_eq!((c.hub.tls.cert, c.hub.tls.key), (None, None));
+    assert_eq!(
+        c.hub.state_dir.as_deref(),
+        file().parent(),
+        "the generated certificate goes next to the file"
+    );
+    let c = config::parse(
+        "[hub.tls]\nenabled = true\ncert = \"tls/hub.pem\"\nkey = \"hub.key\"\n",
+        &file(),
+    )
+    .unwrap();
+    let dir = file().parent().unwrap().to_owned();
+    assert_eq!(c.hub.tls.cert, Some(dir.join("tls").join("hub.pem")));
+    assert_eq!(c.hub.tls.key, Some(dir.join("hub.key")));
 }
 
 #[test]

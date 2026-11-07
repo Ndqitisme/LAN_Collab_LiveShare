@@ -10,6 +10,12 @@ bind = "0.0.0.0"
 port = 8200                         # one TCP port for every project
 discovery = true                    # answer LAN discovery on UDP discovery_port
 discovery_port = 8201
+# public_address = ["hub.example.com", "203.0.113.5"]   # external host: first in the invite code addresses
+
+[hub.tls]
+enabled = false                     # true: clients must use TLS; invite codes carry the certificate fingerprint
+# cert = 'tls\hub.pem'              # PEM chain and key; leave both out for a self-signed certificate that
+# key = 'tls\hub.key'               # is generated once next to this file (tls-selfsigned.pem) and reused
 
 [[project]]
 name = "MyProject"                  # clients join with this name; names ignore case

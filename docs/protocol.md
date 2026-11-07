@@ -337,11 +337,15 @@ These message types are reserved for edit-run history and are filled in by A5 (R
 
 ### 13.1 TLS (A6)
 
-With `[hub.tls] enabled = true` the TCP port expects a TLS handshake. A connection whose first byte is not a TLS handshake record (0x16) gets the single plain-text line `{"t":"error","code":"tls_required","data":{}}` and is closed. On a TLS connection the protocol is unchanged and `welcome.features` includes `tls`. The certificate fingerprint travels in invite v3 field `f` and the client pins it; a mismatch stops the connection and is never skipped automatically.
+With `[hub.tls] enabled = true` the TCP port expects a TLS handshake. A connection whose first byte is not a TLS handshake record (0x16) gets the single plain-text line `{"t":"error","code":"tls_required","data":{}}` and is closed, unless it opens with an HTTP request line, which gets the page of section 13.2 so a browser pointed at `http://` still learns the hub runs. On a TLS connection the protocol is unchanged and `welcome.features` includes `tls`. The certificate fingerprint travels in invite v3 field `f` and the client pins it; a mismatch stops the connection and is never skipped automatically.
+
+The fingerprint is the SHA-256 of the DER leaf certificate as 64 lowercase hex characters, the value `lib/diagnostics.js` computes from `getPeerCertificate().raw`. lanhub uses the PEM certificate and key that `[hub.tls] cert` and `key` name, or else generates a self-signed ECDSA P-256 certificate once (`rcgen`, names `lanhub` and `localhost`) into `tls-selfsigned.pem` next to `lanhub.toml` (single-project mode: `<root>/.lan-collab/`) and reuses it, so the fingerprint stays the same across restarts. The certificate names never follow `public_address`, because clients pin the fingerprint and skip host-name checks. The hub logs `TLS fingerprint SHA256 <hex>` at start. TLS 1.2 and 1.3 are offered (rustls with the ring provider).
 
 ### 13.2 HTTP diagnosis page (A6)
 
 When a connection starts with the bytes `GET `, lanhub answers with an HTTP/1.1 response holding an HTML page that says the hub runs, its version, and its advertised projects, then closes. A user opens `http://<ip>:8200/` in a browser to tell a network fault from an extension fault. The feature is listed as `http-diag`.
+
+Details: the page also shows the hub name, uptime, and whether TLS is on with its fingerprint; it never holds a token, a folder, an instance id or a member. Every path gets the same page and no file is read. `HEAD ` gets the headers only; any other method (`POST `, `PUT `, `DELETE `, `OPTIONS `, `PATCH `, `CONNECT `, `TRACE `) gets `405`. The hub reads at most 8 KiB of the request head before it answers and closes. On a TLS hub the page answers inside TLS (`https://`) and on a plain connection alike (section 13.1).
 
 ## 14. Protocol 1 compatibility
 
@@ -413,7 +417,9 @@ Not part of the wire protocol. Both hubs implement it so `test/conformance/` and
 | `--stop-on-stdin-close` | When stdin closes, the hub writes every pending file and exits with code 0. On Windows a SIGINT sent from Node is a forced kill, so this is the graceful stop for tests. |
 | `--discovery-port <n>` | UDP discovery port, default 8201. |
 | `--no-discovery` | No UDP socket at all. `test/support/hub-process.js` passes it unless a test sets `discoveryPort`, so parallel test files never compete for UDP 8201. |
-| `--tls` | Reserved for A6: TLS with a self-signed certificate. The `tls_required` conformance case runs only when `LANHUB_TLS=1`. |
+| `--tls` | lanhub only (A6), single-project mode: TLS with the self-signed certificate of section 13.1, kept in `<root>/.lan-collab/`. The hub logs `TLS fingerprint SHA256 <hex>` before the listening line. `test/conformance/tls.test.js` and the `tls_required` case run only when `LANHUB_TLS=1`. |
+| `--tls-cert <file>`, `--tls-key <file>` | lanhub only (A6), single-project mode, always together: TLS with this PEM certificate chain and private key. |
+| `--diagnose` | lanhub only (A6): read-only self-check, one line per check (`ok`, `fail` or `skip`, the check name, details, and a fix hint on `fail`) for the config, the TCP port, the discovery port, the IPv4 interfaces, TLS, and on Windows the inbound firewall rules for both ports (`netsh advfirewall firewall show rule name=all dir=in verbose`, never changed). Takes `--config` or `--root` and the port, host, discovery and TLS flags. Exits 0 when no check fails, else 1. |
 | `--config <file>` | lanhub only (feature `multi-project`), instead of `--root`: serve the projects of a `lanhub.toml` and apply the file again whenever it changes. `--port`, `--host`, `--name`, `--discovery-port` and `--no-discovery` override its `[hub]` values. A file that does not parse at start exits with code 1; later, it is logged and the running projects stay. |
 
 A flag given without a value (followed by another `--flag` or nothing) is `true`.

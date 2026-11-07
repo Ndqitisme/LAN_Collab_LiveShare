@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 use crate::session::{self, ProjectHandle};
+use crate::tls::TlsIdentity;
 use crate::util::log;
 
 /// Projects are found by name ignoring case.
@@ -25,6 +26,10 @@ pub struct Table {
     pub advertised: Vec<String>,
     pub hub_name: String,
     pub instance_id: String,
+    /// When TLS is on, every connection must open with a TLS handshake.
+    pub tls: Option<Arc<TlsIdentity>>,
+    /// When the hub started (`now_ms`), for the diagnosis page.
+    pub started_at: u64,
 }
 
 impl Table {
@@ -56,7 +61,7 @@ pub fn accept(listener: TcpListener, router: Arc<Router>) -> JoinHandle<()> {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-                    tokio::spawn(session::serve(stream, addr, router.clone(), key));
+                    tokio::spawn(session::accept(stream, addr, router.clone(), key));
                 }
                 Err(e) => {
                     log(format!("[LỖI] không nhận được kết nối: {e}"));

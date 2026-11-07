@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime};
 
-use lanhub_core::config::{self, Config};
+use lanhub_core::config::{self, Config, HubSettings, TlsSettings};
+use lanhub_core::diagnose::{self, Status};
 use lanhub_core::{Hub, HubConfig, identity, logs};
 
 const USAGE: &str = "Dùng: lanhub-cli [--config lanhub.toml] [--port 8200] [--host 0.0.0.0] [--name TÊN_HUB] [--log-format json] [--stop-on-stdin-close] [--discovery-port 8201] [--no-discovery]
-  hoặc một dự án: lanhub-cli --root <thư mục dự án> [--project TÊN] [--token BÍ_MẬT] [--history DIR] [--allow-file FILE] [--exclude \"a,b\"] cùng các tham số trên";
+  hoặc một dự án: lanhub-cli --root <thư mục dự án> [--project TÊN] [--token BÍ_MẬT] [--history DIR] [--allow-file FILE] [--exclude \"a,b\"] [--tls | --tls-cert CERT.pem --tls-key KEY.pem] cùng các tham số trên
+  tự kiểm tra (chỉ đọc): lanhub-cli --diagnose [--config lanhub.toml | --root <thư mục>] [--port 8200] [--host 0.0.0.0] [--discovery-port 8201] [--no-discovery] [--tls]";
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
@@ -50,24 +52,28 @@ struct Overrides {
 }
 
 impl Overrides {
-    fn apply(&self, mut cfg: Config) -> Config {
+    fn apply_hub(&self, hub: &mut HubSettings) {
         if let Some(p) = self.port {
-            cfg.hub.port = p;
+            hub.port = p;
         }
         if let Some(h) = &self.host {
-            cfg.hub.bind = h.clone();
+            hub.bind = h.clone();
         }
         if let Some(n) = &self.name {
-            cfg.hub.name = Some(n.clone());
+            hub.name = Some(n.clone());
         }
         match self.discovery_port {
-            Some(None) => cfg.hub.discovery = false,
+            Some(None) => hub.discovery = false,
             Some(Some(p)) => {
-                cfg.hub.discovery = true;
-                cfg.hub.discovery_port = p;
+                hub.discovery = true;
+                hub.discovery_port = p;
             }
             None => {}
         }
+    }
+
+    fn apply(&self, mut cfg: Config) -> Config {
+        self.apply_hub(&mut cfg.hub);
         if let Some((project, path)) = &self.crash {
             for p in &mut cfg.projects {
                 if p.name.to_lowercase() == project.to_lowercase() {
@@ -115,6 +121,25 @@ fn main() -> ExitCode {
             },
         }
     };
+    // `--tls` alone generates a self-signed certificate; `--tls-cert` with `--tls-key` uses those files.
+    let tls = match (value("tls-cert"), value("tls-key")) {
+        (Some(c), Some(k)) => TlsSettings {
+            enabled: true,
+            cert: Some(std::path::absolute(&c).unwrap_or_else(|_| c.into())),
+            key: Some(std::path::absolute(&k).unwrap_or_else(|_| k.into())),
+        },
+        (None, None) => TlsSettings {
+            enabled: a.get("tls").is_some_and(|v| v.as_deref() != Some("")),
+            ..TlsSettings::default()
+        },
+        _ => {
+            eprintln!("Không mở được hub: --tls-cert và --tls-key phải đi cùng nhau");
+            return ExitCode::from(1);
+        }
+    };
+    if a.contains_key("diagnose") {
+        return run_diagnose(&a, port, discovery_port, tls);
+    }
     let json_log = value("log-format").as_deref() == Some("json");
     let stop_on_stdin_close = a.contains_key("stop-on-stdin-close");
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -163,6 +188,7 @@ fn main() -> ExitCode {
         name: value("name"),
         discovery_port: discovery_port.unwrap_or(Some(lanhub_core::discovery::DEFAULT_PORT)),
         panic_path: None,
+        tls,
     };
     runtime.block_on(async move {
         let hub = match lanhub_core::start(cfg).await {
@@ -179,6 +205,54 @@ fn main() -> ExitCode {
         hub.stop().await;
         ExitCode::SUCCESS
     })
+}
+
+/// `--diagnose`: the read-only checks of `lanhub_core::diagnose`, one line each. Exits 0 when none fails.
+fn run_diagnose(
+    a: &HashMap<String, Option<String>>,
+    port: Option<u16>,
+    discovery_port: Option<Option<u16>>,
+    tls: TlsSettings,
+) -> ExitCode {
+    let value = |k: &str| a.get(k).cloned().flatten().filter(|v| !v.is_empty());
+    let overrides = Overrides {
+        port,
+        host: value("host"),
+        name: None,
+        discovery_port,
+        crash: None,
+    };
+    let source = match value("root") {
+        Some(root) => {
+            let root = std::path::absolute(&root).unwrap_or_else(|_| root.into());
+            diagnose::Source::Flags(HubSettings {
+                state_dir: Some(root.join(".lan-collab")),
+                tls: tls.clone(),
+                ..HubSettings::default()
+            })
+        }
+        None => match value("config")
+            .map(PathBuf::from)
+            .or_else(config::default_path)
+        {
+            Some(file) => diagnose::Source::File(file),
+            None => diagnose::Source::File(PathBuf::from(config::FILE_NAME)),
+        },
+    };
+    let checks = diagnose::run(source, |hub| {
+        overrides.apply_hub(hub);
+        if tls.enabled {
+            hub.tls = tls.clone();
+        }
+    });
+    for c in &checks {
+        println!("{c}");
+    }
+    if checks.iter().any(|c| c.status == Status::Fail) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// Multi-project mode: serves `file` and re-applies it whenever it changes. A file that does not parse

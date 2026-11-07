@@ -25,8 +25,25 @@ pub struct HubSettings {
     pub port: u16,
     pub discovery: bool,
     pub discovery_port: u16,
-    /// Read for A6 (invite addresses); nothing uses it yet.
+    /// Host names or IP addresses that reach this hub from outside (NAT, cloud VM). They go first in the
+    /// invite `a` list.
     pub public_address: Vec<String>,
+    pub tls: TlsSettings,
+    /// Where hub-level files live (the generated TLS certificate): the folder of `lanhub.toml`, or
+    /// `<root>/.lan-collab` in single-project mode. `None` only for hand-built configs.
+    #[serde(skip)]
+    pub state_dir: Option<PathBuf>,
+}
+
+/// `[hub.tls]`. With `enabled` and no `cert`, the hub generates a self-signed certificate once into
+/// `HubSettings::state_dir` and reuses it, so its fingerprint stays the same across restarts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct TlsSettings {
+    pub enabled: bool,
+    /// PEM certificate chain, leaf first. Absolute. Given together with `key`.
+    pub cert: Option<PathBuf>,
+    /// PEM private key (PKCS#8, PKCS#1 or SEC1). Absolute.
+    pub key: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -105,6 +122,8 @@ impl Default for HubSettings {
             discovery: true,
             discovery_port: crate::discovery::DEFAULT_PORT,
             public_address: Vec::new(),
+            tls: TlsSettings::default(),
+            state_dir: None,
         }
     }
 }
@@ -156,7 +175,7 @@ struct RawHub {
     discovery: bool,
     discovery_port: u16,
     tls: RawTls,
-    public_address: Vec<String>,
+    public_address: Vec<Spanned<String>>,
 }
 
 impl Default for RawHub {
@@ -169,7 +188,7 @@ impl Default for RawHub {
             discovery: d.discovery,
             discovery_port: d.discovery_port,
             tls: RawTls::default(),
-            public_address: d.public_address,
+            public_address: Vec::new(),
         }
     }
 }
@@ -177,7 +196,10 @@ impl Default for RawHub {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RawTls {
-    enabled: Option<Spanned<bool>>,
+    #[serde(default)]
+    enabled: bool,
+    cert: Option<Spanned<String>>,
+    key: Option<Spanned<String>>,
 }
 
 #[derive(Deserialize)]
@@ -272,15 +294,6 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
         let key = e.span().and_then(|s| key_of(text, s.start, &message));
         err(e.span(), key, message)
     })?;
-    if let Some(tls) = &raw.hub.tls.enabled
-        && *tls.get_ref()
-    {
-        return Err(err(
-            Some(tls.span()),
-            Some("hub.tls.enabled".into()),
-            "TLS is not available in this version of the hub".into(),
-        ));
-    }
     let dir = file.parent().unwrap_or(Path::new("."));
     let resolve = |p: &str| -> PathBuf {
         let p = Path::new(p);
@@ -353,6 +366,38 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
         });
     }
     let h = raw.hub;
+    let mut public_address = Vec::with_capacity(h.public_address.len());
+    for a in &h.public_address {
+        let v = a.get_ref().trim();
+        if v.is_empty() || v.contains(char::is_whitespace) || v.contains('/') {
+            return Err(err(
+                Some(a.span()),
+                Some("public_address".into()),
+                format!("\"{}\" is not a host name or IP address", a.get_ref()),
+            ));
+        }
+        public_address.push(v.to_owned());
+    }
+    let tls = match (&h.tls.cert, &h.tls.key) {
+        (Some(c), Some(k)) => TlsSettings {
+            enabled: h.tls.enabled,
+            cert: Some(resolve(c.get_ref())),
+            key: Some(resolve(k.get_ref())),
+        },
+        (None, None) => TlsSettings {
+            enabled: h.tls.enabled,
+            cert: None,
+            key: None,
+        },
+        (Some(given), None) | (None, Some(given)) => {
+            return Err(err(
+                Some(given.span()),
+                Some("hub.tls".into()),
+                "cert and key go together: give both, or neither for a self-signed certificate"
+                    .into(),
+            ));
+        }
+    };
     Ok(Config {
         hub: HubSettings {
             name: h.name.filter(|n| !n.is_empty()),
@@ -360,7 +405,11 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
             port: h.port,
             discovery: h.discovery,
             discovery_port: h.discovery_port,
-            public_address: h.public_address,
+            public_address,
+            tls,
+            state_dir: Some(normalize(
+                &std::path::absolute(dir).unwrap_or(dir.to_owned()),
+            )),
         },
         projects,
     })

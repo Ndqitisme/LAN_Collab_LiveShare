@@ -24,3 +24,7 @@ getrandom = "0.4"
 socket2 = "0.6"
 ts-rs = "12"
 toml = "1.2"
+# ring, not aws-lc-rs: the provider for TLS and certificate generation (see the A6 trail row).
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+sha2 = "0.11"

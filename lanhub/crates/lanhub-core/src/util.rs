@@ -131,8 +131,13 @@ pub fn hostname() -> String {
 
 /// The non-internal IPv4 addresses of `os.networkInterfaces()`: adapters that are up, loopback left out, in
 /// the order the OS lists them.
-#[cfg(windows)]
 pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
+    ipv4_interfaces().into_iter().map(|(_, ip)| ip).collect()
+}
+
+/// `ipv4_addresses` with the name of each address's adapter.
+#[cfg(windows)]
+pub fn ipv4_interfaces() -> Vec<(String, std::net::Ipv4Addr)> {
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
@@ -167,6 +172,14 @@ pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
     while !adapter.is_null() {
         let a = unsafe { &*adapter };
         if a.OperStatus == IfOperStatusUp && a.IfType != IF_TYPE_SOFTWARE_LOOPBACK {
+            let name = if a.FriendlyName.is_null() {
+                String::new()
+            } else {
+                let len = (0..)
+                    .take_while(|&i| unsafe { *a.FriendlyName.add(i) } != 0)
+                    .count();
+                String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(a.FriendlyName, len) })
+            };
             let mut unicast = a.FirstUnicastAddress;
             while !unicast.is_null() {
                 let u = unsafe { &*unicast };
@@ -174,7 +187,7 @@ pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
                 if !sa.is_null() && unsafe { (*sa).sa_family } == AF_INET {
                     let sin = unsafe { &*sa.cast::<SOCKADDR_IN>() };
                     let raw = unsafe { sin.sin_addr.S_un.S_addr };
-                    out.push(std::net::Ipv4Addr::from(raw.to_ne_bytes()));
+                    out.push((name.clone(), std::net::Ipv4Addr::from(raw.to_ne_bytes())));
                 }
                 unicast = u.Next;
             }
@@ -185,7 +198,7 @@ pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
 }
 
 #[cfg(unix)]
-pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
+pub fn ipv4_interfaces() -> Vec<(String, std::net::Ipv4Addr)> {
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
     if unsafe { libc::getifaddrs(&mut list) } != 0 {
         return Vec::new();
@@ -202,7 +215,13 @@ pub fn ipv4_addresses() -> Vec<std::net::Ipv4Addr> {
             && i32::from(unsafe { (*ifa.ifa_addr).sa_family }) == libc::AF_INET
         {
             let sin = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
-            out.push(std::net::Ipv4Addr::from(sin.sin_addr.s_addr.to_ne_bytes()));
+            let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                .to_string_lossy()
+                .into_owned();
+            out.push((
+                name,
+                std::net::Ipv4Addr::from(sin.sin_addr.s_addr.to_ne_bytes()),
+            ));
         }
         p = ifa.ifa_next;
     }

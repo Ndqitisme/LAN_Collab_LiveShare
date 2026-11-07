@@ -18,15 +18,16 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, HubSettings, ProjectConfig};
+use crate::config::{Config, HubSettings, ProjectConfig, TlsSettings};
 use crate::exclude::{DEFAULT_EXCLUDE, Excluder};
 use crate::files::{is_text, uniform_eol, walk};
 use crate::logs::log_in;
 use crate::project::{ActorMsg, ClientInfo, LoadedFile, Project, ProjectInfo};
 use crate::router::{self, Router, Table};
 use crate::session::ProjectHandle;
+use crate::tls::{CertSource, TlsIdentity};
 use crate::util::{self, log, now_ms, random_hex, sha1_hex};
-use crate::{HUB_VERSION, allow, chat, discovery, identity, invite};
+use crate::{HUB_VERSION, allow, chat, discovery, identity, invite, tls};
 
 /// Messages waiting for an actor before readers are made to wait (TCP backpressure).
 const INBOX: usize = 1024;
@@ -128,10 +129,19 @@ struct Discovery {
     task: Option<JoinHandle<()>>,
 }
 
+/// The TLS settings in force and what they loaded; kept so an apply with the same settings loads nothing.
+struct Tls {
+    settings: TlsSettings,
+    state_dir: Option<PathBuf>,
+    identity: Option<Arc<TlsIdentity>>,
+}
+
 #[derive(Default)]
 struct State {
     listener: Option<Listener>,
     discovery: Option<Discovery>,
+    tls: Option<Tls>,
+    public_address: Vec<String>,
     hub_name: String,
     features: Vec<String>,
     projects: Vec<Entry>,
@@ -145,6 +155,7 @@ struct Inner {
     events: broadcast::Sender<ProjectEvent>,
     reply: watch::Sender<Arc<[u8]>>,
     port: AtomicU16,
+    started_at: u64,
 }
 
 #[derive(Clone)]
@@ -184,6 +195,7 @@ impl Registry {
                 events: broadcast::channel(EVENTS).0,
                 reply: watch::channel(Arc::from(Vec::new())).0,
                 port: AtomicU16::new(0),
+                started_at: now_ms(),
             }),
         };
         let report = registry.apply_inner(config, true).await?;
@@ -197,6 +209,12 @@ impl Registry {
 
     pub fn instance_id(&self) -> &str {
         &self.inner.instance_id
+    }
+
+    /// The SHA-256 fingerprint of the certificate when TLS is on.
+    pub async fn tls_fingerprint(&self) -> Option<String> {
+        let st = self.inner.state.lock().await;
+        tls_identity(&st).map(|t| t.fingerprint.clone())
     }
 
     /// Project starts, stops, changes and failures as they happen, for a live status view.
@@ -218,16 +236,29 @@ impl Registry {
         let mut st = self.inner.state.lock().await;
         let st = &mut *st;
         let mut report = ApplyReport::default();
+        let invite_before = invite_facts(st, self.port());
+        Self::apply_tls(st, &config.hub, first).await?;
         self.apply_listener(st, &config.hub, first).await?;
         self.apply_discovery(st, &config.hub).await;
+        st.public_address = config.hub.public_address.clone();
         let hub_name = config.hub.name.clone().unwrap_or_else(util::hostname);
-        let mut features = vec!["chat-image".to_owned(), "multi-project".to_owned()];
+        let mut features = vec![
+            "chat-image".to_owned(),
+            "multi-project".to_owned(),
+            "http-diag".to_owned(),
+        ];
         if st.discovery.as_ref().is_some_and(|d| d.task.is_some()) {
             features.push("discovery".to_owned());
+        }
+        // Every connection on a TLS port is a TLS connection: a plain one is refused before its hello.
+        if tls_identity(st).is_some() {
+            features.push("tls".to_owned());
         }
         let facts_changed = hub_name != st.hub_name || features != st.features;
         st.hub_name = hub_name;
         st.features = features;
+        let invites_changed = !first && invite_facts(st, self.port()) != invite_before;
+        let mut started: Vec<String> = Vec::new();
 
         let desired: Vec<(String, ProjectConfig)> = config
             .projects
@@ -276,12 +307,113 @@ impl Registry {
                     Run::Running(r)
                 }
                 _ if !cfg.enabled => Run::Disabled,
-                _ => self.start_project(st, &key, &cfg, &mut report).await,
+                _ => {
+                    started.push(key.clone());
+                    self.start_project(st, &key, &cfg, &mut report).await
+                }
             };
             st.projects.push(Entry { key, cfg, run });
         }
+        if invites_changed {
+            for e in &st.projects {
+                if matches!(e.run, Run::Running(_)) && !started.contains(&e.key) {
+                    self.log_invites(st, &e.cfg);
+                }
+            }
+        }
         self.publish(st);
         Ok(report)
+    }
+
+    /// Loads the certificate when `[hub.tls]` changed. A first apply that cannot load it fails, so the
+    /// hub never serves plain TCP when TLS was asked; a later one logs the error and keeps what runs.
+    async fn apply_tls(st: &mut State, hub: &HubSettings, first: bool) -> io::Result<()> {
+        if st
+            .tls
+            .as_ref()
+            .is_some_and(|t| t.settings == hub.tls && t.state_dir == hub.state_dir)
+        {
+            return Ok(());
+        }
+        let identity = if hub.tls.enabled {
+            let (settings, dir) = (hub.tls.clone(), hub.state_dir.clone());
+            let loaded =
+                tokio::task::spawn_blocking(move || tls::load_or_create(&settings, dir.as_deref()))
+                    .await
+                    .map_err(io::Error::other)?;
+            match loaded {
+                Ok(id) => {
+                    let from = match &id.source {
+                        CertSource::Generated(p) => format!("Chứng chỉ TLS tự ký: {}", p.display()),
+                        CertSource::Provided(p) => format!("Chứng chỉ TLS: {}", p.display()),
+                    };
+                    log(from);
+                    log(format!("TLS fingerprint SHA256 {}", id.fingerprint));
+                    Some(Arc::new(id))
+                }
+                Err(e) if first => return Err(io::Error::other(format!("TLS: {e}"))),
+                Err(e) => {
+                    log(format!(
+                        "[LỖI] không bật được TLS: {e}. Hub vẫn chạy như trước."
+                    ));
+                    return Ok(());
+                }
+            }
+        } else {
+            if tls_identity(st).is_some() {
+                log("Đã tắt TLS: kết nối mới không mã hoá");
+            }
+            None
+        };
+        st.tls = Some(Tls {
+            settings: hub.tls.clone(),
+            state_dir: hub.state_dir.clone(),
+            identity,
+        });
+        Ok(())
+    }
+
+    /// The invite lines of the Node hub: one legacy `LC-` code per address for 0.1.1 extensions, then one
+    /// `LC3-` code with the public addresses first and every interface address after them. The legacy codes
+    /// are left out with TLS on, which 0.1 clients cannot speak. A machine with no address prints none.
+    fn log_invites(&self, st: &State, cfg: &ProjectConfig) {
+        let port = self.port();
+        let ips = util::ipv4_addresses();
+        let identity = tls_identity(st);
+        if identity.is_none() {
+            for ip in &ips {
+                log_in(
+                    Some(&cfg.name),
+                    &format!(
+                        "Mã mời ({ip}): {}",
+                        invite::encode_v1(*ip, port, &cfg.name, &cfg.token)
+                    ),
+                );
+            }
+        }
+        let mut hosts = st.public_address.clone();
+        for ip in &ips {
+            let ip = ip.to_string();
+            if !hosts.contains(&ip) {
+                hosts.push(ip);
+            }
+        }
+        if !hosts.is_empty() {
+            log_in(
+                Some(&cfg.name),
+                &format!(
+                    "Mã mời: {}",
+                    invite::encode_v3(
+                        &self.inner.instance_id,
+                        &hosts,
+                        port,
+                        &cfg.name,
+                        &cfg.token,
+                        identity.map(|t| t.fingerprint.as_str())
+                    )
+                ),
+            );
+        }
     }
 
     async fn apply_listener(
@@ -421,7 +553,7 @@ impl Registry {
                         ),
                     );
                 }
-                log_invites(&self.inner.instance_id, port, &cfg.name, &cfg.token);
+                self.log_invites(st, cfg);
                 Run::Running(r)
             }
             Err(e) => {
@@ -548,6 +680,8 @@ impl Registry {
         let mut table = Table {
             hub_name: st.hub_name.clone(),
             instance_id: self.inner.instance_id.clone(),
+            tls: tls_identity(st).cloned(),
+            started_at: self.inner.started_at,
             ..Table::default()
         };
         for e in &st.projects {
@@ -564,7 +698,7 @@ impl Registry {
             instance_id: &self.inner.instance_id,
             hub_name: &st.hub_name,
             port: st.listener.as_ref().map_or(0, |l| l.port),
-            tls: false,
+            tls: tls_identity(st).is_some(),
             projects: &table.advertised,
         })
         .expect("the reply serializes");
@@ -747,27 +881,15 @@ fn load_files(root: &Path, excluder: &Excluder) -> Vec<LoadedFile> {
     out
 }
 
-/// The invite lines of the Node hub: one legacy `LC-` code per address for 0.1.1 extensions, then one
-/// `LC3-` code with every address. A machine with no LAN address prints none.
-fn log_invites(instance_id: &str, port: u16, project: &str, token: &str) {
-    let ips = util::ipv4_addresses();
-    for ip in &ips {
-        log_in(
-            Some(project),
-            &format!(
-                "Mã mời ({ip}): {}",
-                invite::encode_v1(*ip, port, project, token)
-            ),
-        );
-    }
-    if !ips.is_empty() {
-        let hosts: Vec<String> = ips.iter().map(ToString::to_string).collect();
-        log_in(
-            Some(project),
-            &format!(
-                "Mã mời: {}",
-                invite::encode_v3(instance_id, &hosts, port, project, token)
-            ),
-        );
-    }
+fn tls_identity(st: &State) -> Option<&Arc<TlsIdentity>> {
+    st.tls.as_ref().and_then(|t| t.identity.as_ref())
+}
+
+/// What the invite codes are made of, apart from each project's name and token.
+fn invite_facts(st: &State, port: u16) -> (u16, Vec<String>, Option<String>) {
+    (
+        port,
+        st.public_address.clone(),
+        tls_identity(st).map(|t| t.fingerprint.clone()),
+    )
 }
