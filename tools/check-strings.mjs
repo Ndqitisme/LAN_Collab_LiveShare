@@ -1,6 +1,7 @@
 // Fails when a Vietnamese caption lives outside extension/i18n/vi.json (docs/copy-guide.md).
-// Scans every .js file under extension/ and lib/. Exempt: comments and the arguments of log() calls, which
-// write to the output channel. package.json cannot read the catalog, so each manifest caption must equal its
+// Scans every .js file under extension/ and lib/, and the .ts and .svelte webview sources under
+// extension/webview-src/ (not their tests, and not the built extension/webview/dist/). Exempt: comments and the
+// arguments of log() calls, which write to the output channel. package.json cannot read the catalog, so each manifest caption must equal its
 // catalog entry instead (command.<id>.title, view.<id>.name, setting.<key>.description, package.description).
 // Usage: node tools/check-strings.mjs [repo root]
 import fs from 'node:fs';
@@ -224,13 +225,78 @@ export function manifestEntries(pkg) {
   return entries;
 }
 
+const SOURCE = /\.(c|m)?js$|\.svelte$|(?<!\.d|\.test)\.ts$/;
+
 function jsFiles(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
     const p = path.join(dir, d.name);
-    if (d.isDirectory()) return d.name === 'node_modules' ? [] : jsFiles(p);
-    return /\.(c|m)?js$/.test(d.name) ? [p] : [];
+    if (d.isDirectory()) return d.name === 'node_modules' || d.name === 'dist' ? [] : jsFiles(p);
+    return SOURCE.test(d.name) ? [p] : [];
   });
+}
+
+// Script text of a source file for the tokenizer, with line numbers kept. A .svelte file becomes its
+// <script> blocks plus each {expression} of the markup; markup text in between becomes a string literal
+// only when it is Vietnamese, so a caption typed straight into the markup is still caught.
+export function sourceText(file) {
+  const src = fs.readFileSync(file, 'utf8');
+  return file.endsWith('.svelte') ? svelteScript(src) : src;
+}
+
+export function svelteScript(src) {
+  const blank = (text) => text.replace(/[^\n]/g, ' ');
+  let out = '';
+  let markup = '';
+  const flushMarkup = () => {
+    const first = [...markup].findIndex((ch) => isVietnamese(ch));
+    if (first < 0) out += blank(markup);
+    else {
+      const head = markup.slice(0, markup.lastIndexOf('\n', first) + 1);
+      const rest = markup.slice(head.length);
+      out += `${blank(head)}${JSON.stringify(rest.replace(/\s+/g, ' '))};${rest.replace(/[^\n]/g, '')}`;
+    }
+    markup = '';
+  };
+  let i = 0;
+  while (i < src.length) {
+    const block = /^<(script|style)\b[^>]*>/.exec(src.slice(i, i + 200));
+    if (block) {
+      flushMarkup();
+      const close = src.indexOf(`</${block[1]}>`, i);
+      if (close < 0) throw new Error(`unterminated <${block[1]}>`);
+      const body = src.slice(i + block[0].length, close);
+      out += blank(block[0]) + (block[1] === 'script' ? `${body};` : blank(body)) + blank(`</${block[1]}>`);
+      i = close + block[1].length + 3;
+    } else if (src.startsWith('<!--', i)) {
+      flushMarkup();
+      const close = src.indexOf('-->', i);
+      out += blank(src.slice(i, close + 3));
+      i = close + 3;
+    } else if (src[i] === '{') {
+      flushMarkup();
+      let depth = 0;
+      let j = i;
+      for (; j < src.length; j += 1) {
+        const ch = src[j];
+        if (ch === '"' || ch === "'" || ch === '`') {
+          const end = src.indexOf(ch, j + 1);
+          if (end < 0) throw new Error('unterminated string in markup expression');
+          j = end;
+        } else if (ch === '{') depth += 1;
+        else if (ch === '}' && --depth === 0) break;
+      }
+      // {#each ...}, {:else ...}, {/if}, {@render ...}: drop the block keyword, keep the expression.
+      const expr = src.slice(i + 1, j).replace(/^\s*[#:/@][a-z]+/, '');
+      out += `(${expr});`;
+      i = j + 1;
+    } else {
+      markup += src[i];
+      i += 1;
+    }
+  }
+  flushMarkup();
+  return out;
 }
 
 export function sourceFiles(root) {
@@ -258,7 +324,7 @@ export function check(root) {
     const rel = path.relative(root, file).replace(/\\/g, '/');
     let found;
     try {
-      found = findCaptions(fs.readFileSync(file, 'utf8'));
+      found = findCaptions(sourceText(file));
     } catch (e) {
       problems.push(`${rel}: cannot scan: ${e.message}`);
       continue;

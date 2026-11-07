@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const { CollabClient, hubErrorText } = require('../lib/client-core');
 const { t } = require('../lib/i18n');
 const { EditorBinding } = require('../lib/editor-binding');
-const { ChatView } = require('./chat-view');
+const { ChatView } = require('./src/views/chat');
 const { LineSocket, PROTO_V2, encodeInvite, decodeInvite } = require('../lib/common');
 
 let ctx;

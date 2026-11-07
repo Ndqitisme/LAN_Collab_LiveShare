@@ -46,7 +46,12 @@
   "scripts": {
     "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/ot.test.js && node --test \"test/conformance/*.test.js\"",
     "test:conformance": "node --test \"test/conformance/*.test.js\"",
+    "pretest:vscode": "npm run build:webviews",
     "test:vscode": "node test/vscode/run.js",
+    "build:webviews": "node extension/webview-src/build.mjs",
+    "test:webviews": "vitest run extension/webview-src",
+    "check:webviews": "svelte-check --workspace extension/webview-src --fail-on-warnings",
+    "vscode:prepublish": "npm run build:webviews",
     "hub": "node hub/hub.js",
     "loadgen": "node tools/loadgen.mjs",
     "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx --yes @vscode/vsce@3 package --no-dependencies -o dist/",

@@ -32,7 +32,7 @@ function protocolNames() {
 
   for (const file of cs.sourceFiles(ROOT)) {
     const rel = path.relative(ROOT, file).replace(/\\/g, '/');
-    for (const call of cs.findTCalls(fs.readFileSync(file, 'utf8'))) {
+    for (const call of cs.findTCalls(cs.sourceText(file))) {
       const at = `${rel}:${call.line}`;
       if (call.id === null) {
         problems.push(`${at}: t() id is not a string literal`);
@@ -90,6 +90,26 @@ function protocolNames() {
     const found = cs.check(tmp);
     assert.strictEqual(found.length, 1, found.join('\n'));
     assert.match(found[0], /^extension\/a\.js:4: /);
+
+    // Webview sources: a caption typed into Svelte markup is caught at its line, t() inside markup is found,
+    // and the built bundle under extension/webview/dist/ is not scanned.
+    fs.mkdirSync(path.join(tmp, 'extension', 'webview-src', 'v'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'extension', 'webview', 'dist', 'v'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'extension', 'a.js'), '');
+    fs.writeFileSync(path.join(tmp, 'extension', 'webview', 'dist', 'v', 'index.js'), "const s = 'Chưa kết nối';");
+    const svelte = path.join(tmp, 'extension', 'webview-src', 'v', 'A.svelte');
+    fs.writeFileSync(svelte, [
+      '<script lang="ts">',
+      "  const n: number = 1; // chú thích",
+      '</script>',
+      '{#each [1] as x (x)}<p title={t(\'a.b\', { n })}>{x}</p>{/each}',
+      '<button>Gửi</button>',
+      '<style>p { color: red; }</style>',
+    ].join('\n'));
+    const webview = cs.check(tmp);
+    assert.deepStrictEqual(webview.map((p) => p.split(': ')[0]), ['extension/webview-src/v/A.svelte:5'], webview.join('\n'));
+    assert.deepStrictEqual(cs.findTCalls(cs.sourceText(svelte)).map((c) => [c.line, c.id, c.keys]), [[4, 'a.b', ['n']]]);
+    fs.rmSync(path.join(tmp, 'extension', 'webview-src'), { recursive: true });
 
     fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ description: 'Mô tả khác', contributes: { commands: [{ command: 'x.y', title: 'Chạy' }] } }));
     fs.writeFileSync(path.join(tmp, 'extension', 'a.js'), '');
