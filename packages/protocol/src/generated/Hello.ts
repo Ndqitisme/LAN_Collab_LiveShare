@@ -4,4 +4,4 @@ import type { Account } from "./Account";
 /**
  * `hello` (section 3.1).
  */
-export type Hello = { proto: number, project: string, token?: string, name?: string, uid?: string, device?: string | null | null, account?: Account | null | null, probe?: boolean, };
+export type Hello = { proto: number, project: string, token?: string, name?: string, uid?: string, device?: string | null, account?: Account | null, probe?: boolean, };

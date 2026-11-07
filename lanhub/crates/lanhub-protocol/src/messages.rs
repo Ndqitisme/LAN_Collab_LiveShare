@@ -91,10 +91,10 @@ pub struct Hello {
     #[ts(optional)]
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, as = "Option<Option<String>>")]
     pub device: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, as = "Option<Option<Account>>")]
     pub account: Option<Account>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
