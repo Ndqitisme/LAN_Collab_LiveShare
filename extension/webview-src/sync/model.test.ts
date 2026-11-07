@@ -38,6 +38,11 @@ describe('rows and choices', () => {
     expect(canSync(c, rowsOf(p))).toBe(false);
   });
 
+  it('keeps a choice made before the plan was rebuilt when the row can still take it', () => {
+    const p = plan({ chosen: { 'a.py': 'merge', 'src/b.py': 'merge', 'logo.png': 'local' } });
+    expect(initialChoices(p)).toEqual({ 'a.py': 'merge', 'src/b.py': null, 'logo.png': 'local' });
+  });
+
   it('refuses a choice the row cannot take', () => {
     const p = plan();
     const rows = rowsOf(p);

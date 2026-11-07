@@ -24,6 +24,8 @@ export interface Plan {
   overwrite: string[];
   upload: string[];
   removeLocal: string[];
+  /** Choices made before the plan was rebuilt, offered again. */
+  chosen?: Record<string, Choice>;
 }
 
 export type Choices = Record<string, Choice | null>;
@@ -46,11 +48,14 @@ export function rowsOf(plan: Plan): Row[] {
 }
 
 // A conflict has no default: one side's edits would be lost without the member looking. A replaced file in a folder
-// joined for the first time takes the hub's version, as 0.1 did, and the local copy is backed up.
+// joined for the first time takes the hub's version, as 0.1 did, and the local copy is backed up. A choice made
+// before the plan was rebuilt stays when the file can still take it.
 export function initialChoices(plan: Plan): Choices {
   const out: Choices = {};
-  for (const r of plan.conflicts) out[r.path] = null;
-  for (const r of plan.replace) out[r.path] = 'hub';
+  for (const row of rowsOf(plan)) {
+    const earlier = plan.chosen?.[row.path];
+    out[row.path] = earlier && row.options.includes(earlier) ? earlier : row.group === 'replace' ? 'hub' : null;
+  }
   return out;
 }
 

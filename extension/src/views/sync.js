@@ -32,7 +32,7 @@ class SyncPanel {
     if (this.pending) this._resolve(false);
     return new Promise((resolve) => {
       this.seq += 1;
-      this.pending = { folder, info, resolve, seq: this.seq };
+      this.pending = { folder, info, resolve, seq: this.seq, askedAt: Date.now() };
       this.docs.clear();
       if (this.panel) {
         this.panel.title = t('sync.panel.tab', { project: info.project });
@@ -65,7 +65,7 @@ class SyncPanel {
     const p = this.pending;
     if (!p || !m) return;
     if (m.type === 'ready') this._postInit();
-    else if (m.type === 'painted') this.app.log(`Bảng đồng bộ đã hiện ${Date.now() - this.syncingAt} ms sau welcome (${p.info.conflicts.length} xung đột, ${p.info.replace.length} file khác bản trên hub).`);
+    else if (m.type === 'painted') this.app.log(`Bảng đồng bộ đã hiện ${Date.now() - this.syncingAt} ms sau welcome, kế hoạch xong sau ${p.askedAt - this.syncingAt} ms (${p.info.conflicts.length} xung đột, ${p.info.replace.length} file khác bản trên hub).`);
     else if (m.type === 'preview') this._preview(p, String(m.path || ''), m.mode === 'merge' ? 'merge' : 'diff');
     else if (m.type === 'cancel') this._finish(false);
     else if (m.type === 'sync') {
@@ -81,6 +81,7 @@ class SyncPanel {
       catalog: catalogFor('sync.'),
       plan: {
         firstTime: info.firstTime,
+        chosen: info.chosen,
         project: info.project,
         folder: folder.name,
         path: folder.uri.fsPath,

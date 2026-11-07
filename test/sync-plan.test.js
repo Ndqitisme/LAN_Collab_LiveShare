@@ -1,7 +1,8 @@
 'use strict';
 
 // The first-sync decision against a real hub: a choice per conflicting file (hub, local, merge), cancel, a folder
-// joined with its own files, and messages that arrive while the decision is open (they wait for the plan).
+// joined with its own files, messages that arrive while the decision is open (they wait for the plan), and files
+// this member changes while the decision is open (the plan is rebuilt).
 // Run: node test/sync-plan.test.js
 const assert = require('assert');
 const fs = require('fs');
@@ -45,10 +46,10 @@ class World {
     this.clients = [];
   }
 
-  client(name, state, confirmSync) {
+  client(name, state, confirmSync, log = () => {}) {
     const root = path.join(this.dir, name);
     fs.mkdirSync(root, { recursive: true });
-    const c = new CollabClient({ root, host: '127.0.0.1', port: this.hub.port, token: 't', project: 'P', name, uid: `${name}-${this.clients.length}`, state, confirmSync, retryMs: 200, log: () => {} });
+    const c = new CollabClient({ root, host: '127.0.0.1', port: this.hub.port, token: 't', project: 'P', name, uid: `${name}-${this.clients.length}`, state, confirmSync, retryMs: 200, log });
     this.clients.push(c);
     c.connect();
     return c;
@@ -194,6 +195,72 @@ async function queuedDuringDecision(w) {
   assert.ok(disk(c, 'a.py').includes('a1 = "bob"') && disk(c, 'a.py').includes('a5 = "bob later"'), 'a.py has every hub edit');
 }
 
+// A file saved while the panel is open: the plan read at welcome is stale and must not win.
+async function editDuringDecision(w) {
+  const bob = w.client('bob', memory());
+  await settled(bob);
+  const back = await aliceOffline(w);
+  const alice = path.join(w.dir, 'alice');
+  fs.writeFileSync(path.join(alice, 'a.py'), SEED['a.py'].replace('a1 = 1', 'a1 = "alice"'));
+  edit(bob, 'a.py', (s) => s.replace('a1 = 1', 'a1 = "bob"'));
+  edit(bob, 'b.py', (s) => s.replace('b9 = 9', 'b9 = "bob"'));
+  await settled(bob);
+
+  const asked = [];
+  const c = back(async (info) => {
+    asked.push(info);
+    if (asked.length === 1) {
+      // d.py was in sync: saving it makes it a local change. b.py was changed only on the hub: saving it makes a conflict.
+      for (const [rel, from, to] of [['d.py', 'd1 = 1', 'd1 = "saved meanwhile"'], ['b.py', 'b2 = 2', 'b2 = "saved meanwhile"']]) {
+        fs.writeFileSync(path.join(alice, rel), SEED[rel].replace(from, to));
+        c.onDiskEvent(path.join(alice, rel)); // what the VS Code file watcher reports
+      }
+      await sleep(300);
+      return { 'a.py': 'hub' };
+    }
+    return { 'b.py': 'local' };
+  });
+  await settled(c);
+  await hubFlushed(w, 'd.py', (t) => t.includes('saved meanwhile'));
+  await hubFlushed(w, 'b.py', (t) => t.includes('saved meanwhile'));
+  assert.strictEqual(asked.length, 2, 'asked again for the file that became a conflict');
+  assert.deepStrictEqual(asked[1].conflicts.map((r) => r.path), ['a.py', 'b.py']);
+  assert.deepStrictEqual(asked[1].chosen, { 'a.py': 'hub' }, 'the earlier choice is offered again');
+  assert.ok(disk(c, 'd.py').includes('saved meanwhile') && view(c, 'd.py').includes('saved meanwhile'), 'the saved edit stays on this machine');
+  assert.ok(disk(c, 'a.py').includes('a1 = "bob"'), 'the earlier choice still applies');
+}
+
+// A reconnect that needs a decision (6 removals) while this member deletes a file it holds open in memory.
+async function deleteDuringDecision(w) {
+  const bob = w.client('bob', memory());
+  await settled(bob);
+  for (let i = 1; i <= 6; i++) fs.writeFileSync(path.join(w.dir, 'bob', `rm${i}.txt`), `rm ${i}
+`);
+  for (let i = 1; i <= 6; i++) bob.onDiskEvent(path.join(w.dir, 'bob', `rm${i}.txt`));
+  await until('hub holds rm6.txt', () => fs.existsSync(path.join(w.root, 'rm6.txt')));
+  const logs = [];
+  let asked = 0;
+  const c = w.client('alice', memory(), async () => {
+    asked += 1;
+    if (asked > 1) return true;
+    fs.rmSync(path.join(c.root, 'd.py'));
+    c.onDiskEvent(path.join(c.root, 'd.py'));
+    await sleep(300); // the watcher's debounce drops the entry
+    return true;
+  }, (line) => logs.push(line));
+  await settled(c);
+  await until('alice has rm6.txt', () => fs.existsSync(path.join(c.root, 'rm6.txt')));
+  await sleep(1200);
+  c.ls.close(); // the link drops
+  for (let i = 1; i <= 6; i++) bob.send({ t: 'delete', path: `rm${i}.txt` });
+  await until('alice asked about the removals', () => asked === 1);
+  await until('alice live again', () => c.ready && c.loading.size === 0);
+  await sleep(500);
+  assert.ok(!logs.some((l) => l.includes('[LỖI]')), `no failed plan: ${logs.filter((l) => l.includes('[LỖI]')).join(' | ')}`);
+  assert.strictEqual(asked, 1, 'asked once');
+  assert.ok(!fs.existsSync(path.join(c.root, 'rm1.txt')), 'the removals ran');
+}
+
 async function joinNonEmpty(w) {
   const root = path.join(w.dir, 'carol');
   fs.mkdirSync(root, { recursive: true });
@@ -221,7 +288,7 @@ async function joinNonEmpty(w) {
 }
 
 (async () => {
-  for (const [name, run] of [['mixed choices', mixedChoices], ['merge', mergeConflict], ['cancel', cancel], ['queued during decision', queuedDuringDecision], ['join non-empty folder', joinNonEmpty]]) {
+  for (const [name, run] of [['mixed choices', mixedChoices], ['merge', mergeConflict], ['cancel', cancel], ['queued during decision', queuedDuringDecision], ['join non-empty folder', joinNonEmpty], ['edit during decision', editDuringDecision], ['delete during decision', deleteDuringDecision]]) {
     const w = new World();
     await w.start(name.replace(/\W+/g, '-'));
     try {
