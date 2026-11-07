@@ -5,10 +5,11 @@
   import { attempt, cycleTheme, dismiss, hub, theme, toasts } from './lib/state.svelte';
   import HubSettings from './routes/HubSettings.svelte';
   import ProjectDetail, { type DetailTab } from './routes/ProjectDetail.svelte';
+  import ImportLegacy from './routes/ImportLegacy.svelte';
   import ProjectForm from './routes/ProjectForm.svelte';
   import Projects from './routes/Projects.svelte';
 
-  type Route = { view: 'list' } | { view: 'add' } | { view: 'detail'; name: string; tab: DetailTab } | { view: 'hub' };
+  type Route = { view: 'list' } | { view: 'add' } | { view: 'import' } | { view: 'detail'; name: string; tab: DetailTab } | { view: 'hub' };
 
   let route = $state<Route>({ view: 'list' });
   let main: HTMLElement | undefined = $state();
@@ -99,7 +100,7 @@
   <main class="scroll" bind:this={main}>
     <div class="content">
       {#if route.view === 'list'}
-        <Projects onadd={() => go({ view: 'add' })} onopen={(name, tab) => go({ view: 'detail', name, tab: tab ?? 'overview' })} />
+        <Projects onadd={() => go({ view: 'add' })} onimport={() => go({ view: 'import' })} onopen={(name, tab) => go({ view: 'detail', name, tab: tab ?? 'overview' })} />
       {:else if route.view === 'hub'}
         <HubSettings onback={() => go({ view: 'list' })} />
       {:else if route.view === 'add'}
@@ -112,6 +113,17 @@
             </div>
           </header>
           <ProjectForm ondone={(name) => go(name ? { view: 'detail', name, tab: 'overview' } : { view: 'list' })} oncancel={() => go({ view: 'list' })} />
+        </section>
+      {:else if route.view === 'import'}
+        <section class="page" aria-labelledby="import-title">
+          <header class="head">
+            <IconButton icon="arrow-left" label={t('detail.back')} onclick={() => go({ view: 'list' })} />
+            <div>
+              <h1 id="import-title">{t('import.title')}</h1>
+              <p class="muted">{t('import.text')}</p>
+            </div>
+          </header>
+          <ImportLegacy ondone={() => go({ view: 'list' })} oncancel={() => go({ view: 'list' })} />
         </section>
       {:else}
         {@const current = route}

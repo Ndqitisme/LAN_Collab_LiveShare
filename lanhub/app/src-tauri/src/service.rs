@@ -2,19 +2,57 @@
 //! writes the validated result, then applies it to the running hub, so the file and the hub never disagree
 //! for longer than one apply. Reads for the UI go through `AdminApi`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use lanhub_core::admin::{AdminApi, LocalAdmin};
+use lanhub_core::admin::{AdminApi, LegacyProject, LocalAdmin};
 use lanhub_core::config::{Config, ConfigError, HubSettings};
-use lanhub_core::registry::{ProjectState, ProjectStatus, Registry};
-use lanhub_core::{Hub, identity, invite, logs, tls, util};
+use lanhub_core::exclude::{DEFAULT_EXCLUDE, Excluder};
+use lanhub_core::history::{HistoryUsage, RetentionReport};
+use lanhub_core::logs::LogRecord;
+use lanhub_core::project::ClientInfo;
+use lanhub_core::registry::{AdminError, InviteCodes, ProjectState, ProjectStatus, Registry};
+use lanhub_core::{Hub, files, identity, logs, tls, util};
 use serde::Serialize;
 use tokio::sync::Notify;
 
-use crate::config_file::{AppError, ConfigFile, HubInput, ProjectInput};
+use crate::config_file::{AppError, ConfigFile, HistoryInput, HubInput, ImportInput, ProjectInput};
 use crate::status::Snapshot;
+
+/// Files an exclude preview lists at most; the total is counted in full.
+pub const PREVIEW_MAX: usize = 200;
+
+/// What the project screens edit, as the hub runs it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettings {
+    pub token: String,
+    pub allow: Vec<String>,
+    /// A 0.1 allow file the hub also reads on every join.
+    pub allow_file: Option<PathBuf>,
+    pub exclude: Vec<String>,
+    pub default_exclude: Vec<String>,
+    pub history_enabled: bool,
+    pub history: HistoryInput,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludePreview {
+    /// The first `PREVIEW_MAX` matching files, sorted.
+    pub files: Vec<String>,
+    pub total: usize,
+    /// Files the project would sync with only the default patterns.
+    pub scanned: usize,
+}
+
+fn admin_error(e: AdminError) -> AppError {
+    match e {
+        AdminError::UnknownProject(name) => AppError::new("unknownProject").param("name", name),
+        AdminError::NotRunning(name) => AppError::new("notRunning").param("name", name),
+    }
+}
 
 #[derive(Clone)]
 struct Live {
@@ -210,14 +248,21 @@ impl AppCore {
         &self,
         change: impl FnOnce(&ConfigFile) -> Result<Config, AppError>,
     ) -> Result<(), AppError> {
+        self.edit_returning(|f| change(f).map(|c| (c, ()))).await
+    }
+
+    async fn edit_returning<T>(
+        &self,
+        change: impl FnOnce(&ConfigFile) -> Result<(Config, T), AppError>,
+    ) -> Result<T, AppError> {
         let _edit = self.edit.lock().await;
         if self.quitting.load(Ordering::Relaxed) {
             return Err(AppError::new("hubDown"));
         }
-        let cfg = change(&self.file)?;
+        let (cfg, out) = change(&self.file)?;
         self.facts().config_error = None;
         self.run(cfg).await;
-        Ok(())
+        Ok(out)
     }
 
     pub async fn add_project(&self, input: &ProjectInput) -> Result<(), AppError> {
@@ -293,7 +338,7 @@ impl AppCore {
     }
 
     /// The invite code of every running project, in config order.
-    pub async fn invite_codes(&self) -> Result<Vec<InviteView>, AppError> {
+    pub async fn all_invite_codes(&self) -> Result<Vec<InviteView>, AppError> {
         let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
         let mut out = Vec::new();
         for p in live.admin.list_projects().await {
@@ -324,34 +369,136 @@ impl AppCore {
     /// The `LC3-` code of the project: the configured public addresses first, then every IPv4 address of
     /// this machine.
     pub async fn invite_code(&self, name: &str) -> Result<String, AppError> {
+        self.invite_codes(name)
+            .await?
+            .code
+            .ok_or_else(|| AppError::new("noAddress"))
+    }
+
+    pub async fn invite_codes(&self, name: &str) -> Result<InviteCodes, AppError> {
         let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
-        let status = live
-            .admin
-            .project_status(name)
-            .await
-            .ok_or_else(|| AppError::new("unknownProject").param("name", name))?;
-        let public = self
-            .facts()
+        live.admin.invite_codes(name).await.map_err(admin_error)
+    }
+
+    fn project_config(&self, name: &str) -> Result<lanhub_core::config::ProjectConfig, AppError> {
+        let key = name.trim().to_lowercase();
+        self.facts()
             .config
             .as_ref()
-            .map(|c| c.hub.public_address.clone())
-            .unwrap_or_default();
-        let hosts: Vec<String> = public
-            .into_iter()
-            .chain(util::ipv4_addresses().iter().map(ToString::to_string))
-            .collect();
-        if hosts.is_empty() {
-            return Err(AppError::new("noAddress"));
+            .and_then(|c| c.projects.iter().find(|p| p.name.to_lowercase() == key))
+            .cloned()
+            .ok_or_else(|| AppError::new("unknownProject").param("name", name))
+    }
+
+    pub fn project_settings(&self, name: &str) -> Result<ProjectSettings, AppError> {
+        let p = self.project_config(name)?;
+        Ok(ProjectSettings {
+            token: p.token,
+            allow: p.allow,
+            allow_file: p.allow_file,
+            exclude: p.exclude,
+            default_exclude: DEFAULT_EXCLUDE.iter().map(|s| (*s).to_owned()).collect(),
+            history_enabled: p.history.enabled,
+            history: HistoryInput {
+                idle_minutes: p.history.idle_minutes,
+                keep_days: p.history.keep_days,
+                max_mb: p.history.max_mb,
+            },
+        })
+    }
+
+    /// A new token, written to the file and in force for the next join. Members already in stay.
+    pub async fn rotate_token(&self, name: &str) -> Result<String, AppError> {
+        self.edit_returning(|f| {
+            let token = util::random_hex::<16>();
+            f.set_token(name, &token).map(|c| (c, token))
+        })
+        .await
+    }
+
+    pub async fn set_allow(&self, name: &str, lines: &[String]) -> Result<(), AppError> {
+        self.edit_with(|f| f.set_allow(name, lines)).await
+    }
+
+    pub async fn set_exclude(&self, name: &str, lines: &[String]) -> Result<(), AppError> {
+        self.edit_with(|f| f.set_exclude(name, lines)).await
+    }
+
+    pub async fn set_history(&self, name: &str, h: &HistoryInput) -> Result<(), AppError> {
+        self.edit_with(|f| f.set_history(name, h)).await
+    }
+
+    /// The files under the project root that `lines` would stop syncing, among those the default patterns
+    /// leave in.
+    pub async fn preview_exclude(
+        &self,
+        name: &str,
+        lines: Vec<String>,
+    ) -> Result<ExcludePreview, AppError> {
+        let root = self.project_config(name)?.root;
+        if !root.is_dir() {
+            return Err(AppError::field("rootMissing", "root"));
         }
-        let fingerprint = live.registry.tls_fingerprint().await;
-        Ok(invite::encode_v3(
-            &self.instance_id,
-            &hosts,
-            live.registry.port(),
-            &status.name,
-            &status.token,
-            fingerprint.as_deref(),
-        ))
+        tokio::task::spawn_blocking(move || {
+            let synced = files::walk(&root, &Excluder::new(DEFAULT_EXCLUDE));
+            let extra = Excluder::new(&lines[..]);
+            let mut matched: Vec<String> = synced
+                .iter()
+                .map(|(rel, _)| rel)
+                .filter(|rel| extra.is_excluded(rel))
+                .cloned()
+                .collect();
+            matched.sort();
+            let total = matched.len();
+            matched.truncate(PREVIEW_MAX);
+            ExcludePreview {
+                files: matched,
+                total,
+                scanned: synced.len(),
+            }
+        })
+        .await
+        .map_err(|_| AppError::new("generic"))
+    }
+
+    pub async fn clients(&self, name: &str) -> Result<Vec<ClientInfo>, AppError> {
+        let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
+        live.admin.clients(name).await.map_err(admin_error)
+    }
+
+    /// `None` when the project runs without history.
+    pub async fn history_usage(&self, name: &str) -> Result<Option<HistoryUsage>, AppError> {
+        let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
+        live.admin.history_usage(name).await.map_err(admin_error)
+    }
+
+    pub async fn run_retention(&self, name: &str) -> Result<RetentionReport, AppError> {
+        let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
+        match live.admin.run_retention(name).await.map_err(admin_error)? {
+            Some(Ok(report)) => Ok(report),
+            Some(Err(_)) => Err(AppError::new("retentionFailed")),
+            None => Err(AppError::new("historyOff")),
+        }
+    }
+
+    pub fn logs(&self, after: u64, limit: usize) -> Vec<LogRecord> {
+        logs::since(after, limit)
+    }
+
+    pub async fn scan_legacy(&self, dir: &Path) -> Result<Vec<LegacyProject>, AppError> {
+        let live = self.live().ok_or_else(|| AppError::new("hubDown"))?;
+        live.admin.import_legacy(dir).await.map_err(|e| {
+            logs::log_in(
+                None,
+                &format!("[LỖI] Không đọc được thư mục {}: {e}", dir.display()),
+            );
+            AppError::new("legacyUnreadable").param("path", dir.display().to_string())
+        })
+    }
+
+    /// Adds the projects whose names are new, in one write. Returns the names added.
+    pub async fn import_legacy(&self, items: &[ImportInput]) -> Result<Vec<String>, AppError> {
+        self.edit_returning(|f| f.import_projects(items)).await
     }
 
     /// Refuses further edits, waits for one in progress, then writes every pending file and stops serving.

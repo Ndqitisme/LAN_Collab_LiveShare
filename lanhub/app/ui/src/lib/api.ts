@@ -47,8 +47,87 @@ export interface ProjectInput {
 /** `code` is a key under `errors` in vi.json; `field` is the form field it belongs to. */
 export interface AppError {
   code: string;
-  field: 'name' | 'root' | null;
+  field: 'name' | 'root' | 'allow' | 'exclude' | 'idleMinutes' | 'keepDays' | 'maxMb' | null;
   params: Record<string, string>;
+}
+
+export interface HistoryInput {
+  idleMinutes: number;
+  keepDays: number;
+  maxMb: number;
+}
+
+export interface ProjectSettings {
+  token: string;
+  allow: string[];
+  allowFile: string | null;
+  exclude: string[];
+  defaultExclude: string[];
+  historyEnabled: boolean;
+  history: HistoryInput;
+}
+
+export interface ExcludePreview {
+  files: string[];
+  total: number;
+  scanned: number;
+}
+
+export interface HistoryUsage {
+  dbBytes: number;
+  blobBytes: number;
+  blobCount: number;
+  runs: number;
+}
+
+export interface RetentionReport {
+  runsDeleted: number;
+  blobsDeleted: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}
+
+export interface InviteCodes {
+  code: string | null;
+  hosts: string[];
+  port: number;
+  tls: boolean;
+  legacy: { host: string; code: string }[];
+}
+
+export interface ClientInfo {
+  id: string;
+  name: string;
+  account: string | null;
+  addr: string;
+  joinedAt: number;
+  rtt: number | null;
+  file: string | null;
+}
+
+export type LogLevel = 'info' | 'warn' | 'error';
+
+export interface LogRecord {
+  seq: number;
+  ts: number;
+  level: LogLevel;
+  project: string | null;
+  msg: string;
+}
+
+export interface LegacyProject {
+  name: string;
+  token: string;
+  allow: string[];
+  root: string | null;
+  exists: boolean;
+}
+
+export interface ImportInput {
+  name: string;
+  root: string;
+  token: string;
+  allow: string[];
 }
 
 /** A tray action's result: `code` is a full vi.json key. */
@@ -74,6 +153,22 @@ export const api = {
   copyText: (text: string) => invoke<void>('copy_text', { text }),
   openFolder: (path: string) => invoke<void>('open_folder', { path }),
   reload: () => invoke<void>('reload_config'),
+
+  projectSettings: (name: string) => invoke<ProjectSettings>('project_settings', { name }),
+  rotateToken: (name: string) => invoke<string>('rotate_token', { name }),
+  setAllow: (name: string, lines: string[]) => invoke<void>('set_allow', { name, lines }),
+  setExclude: (name: string, lines: string[]) => invoke<void>('set_exclude', { name, lines }),
+  previewExclude: (name: string, lines: string[]) => invoke<ExcludePreview>('preview_exclude', { name, lines }),
+  setHistory: (name: string, history: HistoryInput) => invoke<void>('set_history', { name, history }),
+  historyUsage: (name: string) => invoke<HistoryUsage | null>('history_usage', { name }),
+  runRetention: (name: string) => invoke<RetentionReport>('run_retention', { name }),
+  inviteCodes: (name: string) => invoke<InviteCodes>('invite_codes', { name }),
+  clients: (name: string) => invoke<ClientInfo[]>('project_clients', { name }),
+  logs: (after: number, limit: number) => invoke<LogRecord[]>('get_logs', { after, limit }),
+  exportLogs: (title: string, filter: string, fileName: string, text: string) =>
+    invoke<string | null>('export_logs', { title, filter, fileName, text }),
+  scanLegacy: (dir: string) => invoke<LegacyProject[]>('scan_legacy', { dir }),
+  importLegacy: (items: ImportInput[]) => invoke<string[]>('import_legacy', { items }),
 };
 
 export function onStatus(fn: (s: Snapshot) => void): Promise<UnlistenFn> {
@@ -138,7 +233,7 @@ export interface FirewallResult {
 export const hubApi = {
   settings: () => invoke<HubSettingsView>('get_hub_settings'),
   update: (input: HubInput) => invoke<HubSettingsView>('update_hub', { input }),
-  invites: () => invoke<InviteView[]>('invite_codes'),
+  invites: () => invoke<InviteView[]>('hub_invite_codes'),
   pickFile: (title: string, start: string | null) => invoke<string | null>('pick_file', { title, start }),
   firewallStatus: () => invoke<FirewallReport>('firewall_status'),
   openFirewall: () => invoke<FirewallResult>('open_firewall'),

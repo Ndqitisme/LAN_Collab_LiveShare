@@ -35,9 +35,12 @@
   }
 </script>
 
+<!-- Focusable so the keyboard scrolls the list (arrows, Page Up, Page Down). -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="lc-virtual"
   style:height
+  tabindex="0"
   role="list"
   aria-label={label}
   bind:clientHeight={viewport}

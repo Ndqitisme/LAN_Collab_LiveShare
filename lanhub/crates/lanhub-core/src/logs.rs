@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::util::{local_time, now_ms};
 
-const KEEP: usize = 2000;
+const KEEP: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

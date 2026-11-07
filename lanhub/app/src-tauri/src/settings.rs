@@ -26,8 +26,8 @@ pub async fn update_hub(core: Core<'_>, input: HubInput) -> Result<HubSettingsVi
 }
 
 #[tauri::command]
-pub async fn invite_codes(core: Core<'_>) -> Result<Vec<InviteView>, AppError> {
-    core.invite_codes().await
+pub async fn hub_invite_codes(core: Core<'_>) -> Result<Vec<InviteView>, AppError> {
+    core.all_invite_codes().await
 }
 
 /// The file chosen in the native dialog, or `None` when it was cancelled.

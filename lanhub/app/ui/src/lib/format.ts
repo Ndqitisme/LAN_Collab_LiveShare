@@ -1,4 +1,4 @@
-import { t } from '../i18n';
+import { num, t } from '../i18n';
 
 /** "Vừa xong", "3 phút trước", "2 giờ trước", "4 ngày trước", or "Chưa có". */
 export function ago(ms: number | null, now: number): string {
@@ -26,4 +26,16 @@ export function shortPath(p: string): string {
   if (parts.length <= 4) return p;
   const sep = p.includes('\\') ? '\\' : '/';
   return [parts[0], '…', ...parts.slice(-2)].join(sep);
+}
+
+const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/** "0 B", "512 KB", "1,4 MB": binary multiples, one decimal from MB up. */
+export function bytes(n: number): string {
+  let i = 0;
+  while (n >= 1024 && i < UNITS.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${num(i >= 2 ? Math.round(n * 10) / 10 : Math.round(n))} ${UNITS[i]}`;
 }

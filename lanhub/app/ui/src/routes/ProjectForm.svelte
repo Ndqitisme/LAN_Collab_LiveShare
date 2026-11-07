@@ -70,7 +70,7 @@
       toast('ok', t(initial ? 'form.saved' : 'form.created', { name: input.name }));
       ondone(input.name);
     } catch (err) {
-      if (isAppError(err) && err.field) serverError = { field: err.field, text: errorText(err) };
+      if (isAppError(err) && (err.field === 'name' || err.field === 'root')) serverError = { field: err.field, text: errorText(err) };
       else toast('danger', errorText(err));
     } finally {
       saving = false;

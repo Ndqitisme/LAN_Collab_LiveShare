@@ -3,10 +3,16 @@
   import { t } from '../i18n';
 
   /** The tabs of a project. A tab is an id here plus a branch in the panel below. */
-  export type DetailTab = 'overview' | 'settings';
+  export type DetailTab = 'overview' | 'access' | 'sync' | 'history' | 'invite' | 'members' | 'logs' | 'settings';
 
   export const detailTabs = (): (TabItem & { id: DetailTab })[] => [
     { id: 'overview', label: t('detail.overview'), icon: 'activity' },
+    { id: 'access', label: t('detail.access'), icon: 'key-round' },
+    { id: 'sync', label: t('detail.sync'), icon: 'refresh-cw' },
+    { id: 'history', label: t('detail.history'), icon: 'history' },
+    { id: 'invite', label: t('detail.invite'), icon: 'link' },
+    { id: 'members', label: t('detail.members'), icon: 'users' },
+    { id: 'logs', label: t('detail.logs'), icon: 'file-text' },
     { id: 'settings', label: t('detail.settings'), icon: 'settings' },
   ];
 </script>
@@ -19,6 +25,12 @@
   import { stateLook } from '../lib/look';
   import { attempt, clock, hub } from '../lib/state.svelte';
   import ProjectForm from './ProjectForm.svelte';
+  import Access from './project/Access.svelte';
+  import History from './project/History.svelte';
+  import Invite from './project/Invite.svelte';
+  import Logs from './project/Logs.svelte';
+  import Members from './project/Members.svelte';
+  import Sync from './project/Sync.svelte';
 
   interface Props {
     name: string;
@@ -118,6 +130,18 @@
                 </div>
               </dl>
             </Card>
+          {:else if selected === 'access'}
+            <Access {project} />
+          {:else if selected === 'sync'}
+            <Sync {project} />
+          {:else if selected === 'history'}
+            <History {project} />
+          {:else if selected === 'invite'}
+            <Invite {project} />
+          {:else if selected === 'members'}
+            <Members {project} />
+          {:else if selected === 'logs'}
+            <Logs {project} />
           {:else if selected === 'settings'}
             {#key project.name}
               <ProjectForm {project} ondone={onsaved} oncancel={() => ontab('overview')} />

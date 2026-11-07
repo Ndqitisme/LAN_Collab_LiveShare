@@ -27,8 +27,8 @@ use crate::exclude::Excluder;
 use crate::files::{abs_path, uniform_eol};
 use crate::flush::{FlushSchedule, Io, IoJob, IoResult};
 use crate::history::{
-    self, Author, BlobRecord, Closed, Content, Counters, Edit, History, Job, OpenRun, Reply, Runs,
-    Source, StartBlob,
+    self, Author, BlobRecord, Closed, Content, Counters, Edit, History, HistoryUsage, Job, OpenRun,
+    Reply, RetentionReport, Runs, Source, StartBlob,
 };
 use crate::paths::safe_rel;
 use crate::presence;
@@ -86,6 +86,8 @@ pub struct ClientInfo {
     pub joined_at: u64,
     /// Milliseconds, as the client last reported it in `presence.p.rtt`.
     pub rtt: Option<f64>,
+    /// The file open in the member's editor, from `presence.p.file`.
+    pub file: Option<String>,
 }
 
 /// A hello the session accepted.
@@ -119,6 +121,13 @@ pub enum ActorMsg {
     Clients {
         reply: oneshot::Sender<Vec<ClientInfo>>,
     },
+    /// `None` when the project runs without history.
+    HistoryUsage {
+        reply: oneshot::Sender<Option<HistoryUsage>>,
+    },
+    RunRetention {
+        reply: oneshot::Sender<Option<Result<RetentionReport, String>>>,
+    },
 }
 
 struct Member {
@@ -148,6 +157,11 @@ impl Member {
             addr: self.addr.clone(),
             joined_at: self.joined_at,
             rtt: self.presence.as_ref().and_then(|p| p.rtt).map(|n| n.0),
+            file: self
+                .presence
+                .as_ref()
+                .and_then(|p| p.file.as_ref())
+                .map(|f| f.to_utf8_lossy().into_owned()),
         }
     }
 
@@ -424,6 +438,18 @@ impl Project {
                     Some(ActorMsg::Clients { reply }) => {
                         let _ = reply.send(self.members.iter().map(Member::client_info).collect());
                     }
+                    Some(ActorMsg::HistoryUsage { reply }) => match &self.edit_history {
+                        Some(h) => h.send(Job::Usage { reply }),
+                        None => {
+                            let _ = reply.send(None);
+                        }
+                    },
+                    Some(ActorMsg::RunRetention { reply }) => match &self.edit_history {
+                        Some(h) => h.send(Job::Retain { reply }),
+                        None => {
+                            let _ = reply.send(None);
+                        }
+                    },
                     Some(msg) => {
                         self.crash_hook(&msg);
                         self.dispatch(msg).await;
@@ -503,7 +529,11 @@ impl Project {
             ),
             ActorMsg::Join(j) => ("hello".to_owned(), j.key, None),
             ActorMsg::Leave { key } => ("leave".to_owned(), *key, None),
-            ActorMsg::Shutdown { .. } | ActorMsg::Reconfigure { .. } | ActorMsg::Clients { .. } => {
+            ActorMsg::Shutdown { .. }
+            | ActorMsg::Reconfigure { .. }
+            | ActorMsg::Clients { .. }
+            | ActorMsg::HistoryUsage { .. }
+            | ActorMsg::RunRetention { .. } => {
                 unreachable!("handled by run")
             }
         };
@@ -611,9 +641,11 @@ impl Project {
                     _ => None,
                 }
             }
-            ActorMsg::Shutdown { .. } | ActorMsg::Reconfigure { .. } | ActorMsg::Clients { .. } => {
-                None
-            }
+            ActorMsg::Shutdown { .. }
+            | ActorMsg::Reconfigure { .. }
+            | ActorMsg::Clients { .. }
+            | ActorMsg::HistoryUsage { .. }
+            | ActorMsg::RunRetention { .. } => None,
         }
     }
 
