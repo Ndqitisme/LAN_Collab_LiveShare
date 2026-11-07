@@ -129,8 +129,11 @@ class SyncPanel {
     this._resolve(answer);
     const panel = this.panel;
     this.panel = null;
-    if (panel) panel.dispose();
-    this._closePreviews();
+    // After the core has run the plan: closing a webview and its diff tabs is not free, and the sync waits on it.
+    setTimeout(() => {
+      if (panel) panel.dispose();
+      this._closePreviews();
+    }, 0);
   }
 
   _closePreviews() {
