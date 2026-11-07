@@ -362,15 +362,25 @@ export class Webview {
   }
 
   // Input goes to the workbench page in its coordinates: webview iframe box + content frame offset + element.
+  // Focusable targets are clicked until they hold focus: right after the webview is revealed (or a quick
+  // input closes) the workbench moves focus asynchronously and can take it back from the first click.
   async click(selector) {
-    const { model } = await this.vs.page.send('DOM.getBoxModel', {
-      backendNodeId: (await this.vs.page.send('DOM.getFrameOwner', { frameId: this.frameId })).backendNodeId,
-    });
-    const [ox, oy] = model.content;
-    const inner = await this.session.evaluate(`(() => { const r = document.getElementById('active-frame').getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
-    const contextId = await this.contentContext();
-    const r = await this.session.rect(selector, { contextId });
-    await this.vs.page.mouse(ox + inner.x + r.x + r.width / 2, oy + inner.y + r.y + r.height / 2);
+    const focusable = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!el && el.tabIndex >= 0 && !el.disabled; })()`;
+    const focused = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return document.hasFocus() && !!el && el.contains(document.activeElement); })()`;
+    for (let attempt = 0; ; attempt++) {
+      const { model } = await this.vs.page.send('DOM.getBoxModel', {
+        backendNodeId: (await this.vs.page.send('DOM.getFrameOwner', { frameId: this.frameId })).backendNodeId,
+      });
+      const [ox, oy] = model.content;
+      const inner = await this.session.evaluate(`(() => { const r = document.getElementById('active-frame').getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
+      const contextId = await this.contentContext();
+      const r = await this.session.rect(selector, { contextId });
+      await this.vs.page.mouse(ox + inner.x + r.x + r.width / 2, oy + inner.y + r.y + r.height / 2);
+      if (!await this.evaluate(focusable)) return;
+      const ok = await waitFor(() => this.evaluate(focused), { timeout: 1000, interval: 50 }).then(() => true, () => false);
+      if (ok) return;
+      if (attempt === 2) throw new Error(`click ${selector}: the element did not keep focus after 3 clicks`);
+    }
   }
 
   type(text) {

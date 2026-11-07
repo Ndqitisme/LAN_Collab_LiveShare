@@ -71,7 +71,7 @@ If VS Code dies, every later verb rejects with `VS Code (pid N) exited unexpecte
 |---|---|
 | `evaluate(exprOrFn, args)` | Runs in the webview content document (the `active-frame` iframe), in an isolated world: full DOM access, page JS globals not visible. |
 | `waitFor(exprOrFn, { timeout })` | Polls `evaluate`. |
-| `click(selector)` | Clicks the element with mouse events on the workbench, at webview box + content frame offset + element centre. |
+| `click(selector)` | Clicks the element with mouse events on the workbench, at webview box + content frame offset + element centre. A focusable element is clicked again (up to 3 times) until it holds focus, because the workbench moves focus asynchronously right after a view is revealed. |
 | `type(text)`, `press(key, modifiers)` | Keyboard input to the focused element. Click the target first. |
 
 Fields: `session` (the webview target), `frameId`.
