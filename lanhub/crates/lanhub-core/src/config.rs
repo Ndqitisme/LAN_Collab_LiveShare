@@ -29,7 +29,7 @@ pub struct HubSettings {
     /// invite `a` list.
     pub public_address: Vec<String>,
     pub tls: TlsSettings,
-    /// Where hub-level files live (the generated TLS certificate): the folder of `lanhub.toml`, or
+    /// Where the generated TLS certificate lives: `.lan-collab` next to `lanhub.toml`, or
     /// `<root>/.lan-collab` in single-project mode. `None` only for hand-built configs.
     #[serde(skip)]
     pub state_dir: Option<PathBuf>,
@@ -369,11 +369,19 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
     let mut public_address = Vec::with_capacity(h.public_address.len());
     for a in &h.public_address {
         let v = a.get_ref().trim();
-        if v.is_empty() || v.contains(char::is_whitespace) || v.contains('/') {
+        // One colon is a port (the invite has its own `p`); IPv6 literals have several.
+        if v.is_empty()
+            || v.contains(char::is_whitespace)
+            || v.contains('/')
+            || v.matches(':').count() == 1
+        {
             return Err(err(
                 Some(a.span()),
                 Some("public_address".into()),
-                format!("\"{}\" is not a host name or IP address", a.get_ref()),
+                format!(
+                    "\"{}\" is not a host name or IP address (no port, no scheme)",
+                    a.get_ref()
+                ),
             ));
         }
         public_address.push(v.to_owned());
@@ -407,9 +415,11 @@ pub fn parse(text: &str, file: &Path) -> Result<Config, ConfigError> {
             discovery_port: h.discovery_port,
             public_address,
             tls,
-            state_dir: Some(normalize(
-                &std::path::absolute(dir).unwrap_or(dir.to_owned()),
-            )),
+            // `.lan-collab` is never synced, so the generated key stays private even when lanhub.toml
+            // sits inside a project folder.
+            state_dir: Some(
+                normalize(&std::path::absolute(dir).unwrap_or(dir.to_owned())).join(".lan-collab"),
+            ),
         },
         projects,
     })

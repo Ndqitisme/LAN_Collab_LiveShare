@@ -147,7 +147,7 @@ test('invite v3 carries public_address first and the fingerprint in f', { skip }
     assert.strictEqual(inv.fingerprint, fp);
     assert.strictEqual(inv.port, hub.port);
     assert.strictEqual(inv.project, 'Demo');
-    assert.ok(fs.existsSync(path.join(dir, 'tls-selfsigned.pem')), 'the certificate sits next to lanhub.toml');
+    assert.ok(fs.existsSync(path.join(dir, '.lan-collab', 'tls-selfsigned.pem')), 'the certificate sits in .lan-collab next to lanhub.toml');
   } finally {
     await hub.stop();
   }

@@ -258,6 +258,11 @@ impl Registry {
         st.hub_name = hub_name;
         st.features = features;
         let invites_changed = !first && invite_facts(st, self.port()) != invite_before;
+        // The listener already accepts: publish the TLS identity before the projects load, or a TLS hub
+        // would treat its first connections as plain.
+        if first {
+            self.publish(st);
+        }
         let mut started: Vec<String> = Vec::new();
 
         let desired: Vec<(String, ProjectConfig)> = config

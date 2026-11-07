@@ -513,6 +513,43 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             }
             backlog.since.store(mono_ms(), Ordering::Release);
         }
+        // A TLS stream reports bytes written once they sit in its record buffer, even when the socket is
+        // full; without a flush the end of a batch would wait for the next line. Free on plain TCP.
+        let flushed = tokio::select! {
+            biased;
+            _ = closed(&mut close_rx) => return,
+            r = wr.flush() => r,
+        };
+        if flushed.is_err() {
+            let _ = close.send(true);
+            return;
+        }
         backlog.bytes.fetch_sub(data.len(), Ordering::AcqRel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A TLS stream accepts plaintext into its record buffer and reports it written even when the socket
+    /// is full; only a flush guarantees it leaves. A `BufWriter` behaves the same way.
+    #[tokio::test]
+    async fn write_loop_flushes_each_batch() {
+        let (near, mut far) = tokio::io::duplex(1 << 20);
+        let wr = tokio::io::BufWriter::with_capacity(1 << 20, near);
+        let (tx, rx) = mpsc::unbounded_channel::<Line>();
+        let (close, _) = watch::channel(false);
+        let backlog = Arc::new(Backlog::default());
+        tokio::spawn(write_loop(wr, rx, backlog.clone(), Arc::new(close)));
+        backlog.bytes.fetch_add(4, Ordering::AcqRel);
+        tx.send(b"ack\n".to_vec().into()).unwrap();
+        let mut got = [0u8; 4];
+        tokio::time::timeout(Duration::from_secs(2), far.read_exact(&mut got))
+            .await
+            .expect("the line reaches the peer without another line behind it")
+            .unwrap();
+        assert_eq!(&got, b"ack\n");
+        drop(tx);
     }
 }

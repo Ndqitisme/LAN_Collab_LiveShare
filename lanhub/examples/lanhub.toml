@@ -15,7 +15,7 @@ discovery_port = 8201
 [hub.tls]
 enabled = false                     # true: clients must use TLS; invite codes carry the certificate fingerprint
 # cert = 'tls\hub.pem'              # PEM chain and key; leave both out for a self-signed certificate that
-# key = 'tls\hub.key'               # is generated once next to this file (tls-selfsigned.pem) and reused
+# key = 'tls\hub.key'               # is generated once in .lan-collab next to this file and reused
 
 [[project]]
 name = "MyProject"                  # clients join with this name; names ignore case

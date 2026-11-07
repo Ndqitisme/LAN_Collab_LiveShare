@@ -174,6 +174,14 @@ fn config_error_names_file_line_column_and_key() {
         (2, Some("public_address")),
         "{e}"
     );
+    let e = err("[hub]\npublic_address = [\"203.0.113.5:9000\"]\n");
+    assert_eq!(
+        e.key.as_deref(),
+        Some("public_address"),
+        "a port is refused: {e}"
+    );
+    let c = config::parse("[hub]\npublic_address = [\"2001:db8::5\"]\n", &file()).unwrap();
+    assert_eq!(c.hub.public_address, ["2001:db8::5"]);
 }
 
 #[test]
@@ -182,9 +190,9 @@ fn config_reads_tls() {
     assert!(c.hub.tls.enabled);
     assert_eq!((c.hub.tls.cert, c.hub.tls.key), (None, None));
     assert_eq!(
-        c.hub.state_dir.as_deref(),
-        file().parent(),
-        "the generated certificate goes next to the file"
+        c.hub.state_dir,
+        Some(file().parent().unwrap().join(".lan-collab")),
+        "the generated certificate goes next to the file, in the folder sync skips"
     );
     let c = config::parse(
         "[hub.tls]\nenabled = true\ncert = \"tls/hub.pem\"\nkey = \"hub.key\"\n",
