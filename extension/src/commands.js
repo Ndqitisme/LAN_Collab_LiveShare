@@ -6,6 +6,7 @@ const { ACTIVE } = require('../../lib/connection-machine');
 const { join, copyInvite } = require('./connection/invite');
 const { signIn } = require('./connection/account');
 const { actionLabel, runAction } = require('./connection/actions');
+const { restoreBackup } = require('./backup');
 
 function connect(app) {
   const s = app.controller.state;
@@ -73,6 +74,7 @@ function registerCommands(app) {
   cmd('lanCollab.signIn', () => signIn(app));
   cmd('lanCollab.join', (code) => join(app, code));
   cmd('lanCollab.copyInvite', () => copyInvite(app));
+  cmd('lanCollab.restoreBackup', () => restoreBackup(app));
 }
 
 module.exports = { registerCommands };

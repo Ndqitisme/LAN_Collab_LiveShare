@@ -3,27 +3,6 @@
 const vscode = require('vscode');
 const { t } = require('../../../lib/i18n');
 
-// Returns false (cancel), true (go ahead; conflicting files take the hub's version) or 'local'.
-async function confirmSync(folder, info) {
-  const lines = [
-    t('sync.confirm.title', { folder: folder.name, project: info.project }),
-    '',
-    t('sync.confirm.get', { get: info.get, overwrite: info.overwrite }),
-    t('sync.confirm.upload', { upload: info.upload }),
-    t('sync.confirm.remove', { removeLocal: info.removeLocal }),
-  ];
-  if (info.conflicts.length) {
-    const names = info.conflicts.slice(0, 8).join(', ') + (info.conflicts.length > 8 ? ', …' : '');
-    lines.push('', t('sync.confirm.conflicts', { count: info.conflicts.length, names }), t('sync.confirm.conflictsHint'));
-  }
-  lines.push('', t('sync.confirm.backup'));
-  const keepLocal = t('sync.button.keepLocal');
-  const buttons = info.conflicts.length ? [t('sync.button.useHub'), keepLocal] : [t('sync.button.sync')];
-  const pick = await vscode.window.showWarningMessage(lines.join('\n'), { modal: true }, ...buttons);
-  if (pick === keepLocal) return 'local';
-  return Boolean(pick);
-}
-
 // After joining, files keep arriving for a moment: show it, so nobody starts editing a half-downloaded tree.
 function showDownloadProgress(controller) {
   const c = controller.core;
@@ -59,4 +38,4 @@ function showDownloadProgress(controller) {
   }));
 }
 
-module.exports = { confirmSync, showDownloadProgress };
+module.exports = { showDownloadProgress };

@@ -60,13 +60,9 @@ async function join(app, codeArg) {
       title: t('join.folder.title', { project: conn.project }),
     });
     if (!picked) return;
+    // A folder with files gets the sync panel on its first sync: every file to replace or upload is listed there
+    // with a choice before anything is written.
     target = { uri: picked[0] };
-    if (!isEmptyDir(target.uri.fsPath)) {
-      const go = await vscode.window.showWarningMessage(
-        t('join.folder.notEmpty', { path: target.uri.fsPath }),
-        { modal: true }, t('sync.button.sync'));
-      if (!go) return;
-    }
   }
   await config.saveJoin(app.context, target.uri, conn);
 
