@@ -11,6 +11,7 @@ const { registerCommands } = require('./commands');
 const { StatusBar } = require('./status-bar');
 const { SessionView } = require('./views/session');
 const { ConnectionPanel } = require('./views/connection');
+const { SyncPanel } = require('./views/sync');
 const { Editors } = require('./editors');
 const { Decorations } = require('./decorations');
 const { Presence } = require('./presence');
@@ -26,6 +27,7 @@ function activate(context) {
   };
   app = { context, out, log, lastEditor: null };
   app.controller = new ConnectionController(app);
+  app.sync = new SyncPanel(app);
   app.editors = new Editors(app);
   app.decorations = new Decorations(app);
   app.presence = new Presence(app);
@@ -45,6 +47,7 @@ function activate(context) {
   const { controller, editors, decorations, presence, session, statusBar, chatView } = app;
   context.subscriptions.push(
     out,
+    app.sync,
     statusBar.item,
     vscode.window.registerWebviewViewProvider('lanCollab.session', session, { webviewOptions: { retainContextWhenHidden: true } }),
     session,

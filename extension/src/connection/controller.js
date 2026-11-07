@@ -8,7 +8,6 @@ const diagnostics = require('../../../lib/diagnostics');
 const config = require('../config');
 const joins = require('./joins');
 const { getAccount } = require('./account');
-const { confirmSync } = require('./sync-ui');
 
 // Settings baked into a running client core. A change restarts the connection without asking.
 const RESTART_KEYS = ['lanCollab.server', 'lanCollab.project', 'lanCollab.token', 'lanCollab.exclude'];
@@ -174,7 +173,7 @@ class ConnectionController {
         get: (k) => ctx.workspaceState.get(`lanCollab.${k}`),
         set: (k, v) => ctx.workspaceState.update(`lanCollab.${k}`, v),
       },
-      confirmSync: (info) => confirmSync(folder, info),
+      confirmSync: (info) => this.app.sync.decide(folder, info),
       log: this.app.log,
       openSocket: () => this._openSocket(),
       retryDelay: (n) => diagnostics.backoffDelay(n),

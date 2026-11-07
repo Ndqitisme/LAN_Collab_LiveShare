@@ -44,7 +44,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node --test \"test/conformance/*.test.js\"",
+    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node test/sync-plan.test.js && node --test \"test/conformance/*.test.js\"",
     "test:conformance": "node --test \"test/conformance/*.test.js\"",
     "pretest:vscode": "npm run build:webviews",
     "test:vscode": "node test/vscode/run.js",
@@ -123,6 +123,11 @@
       {
         "command": "lanCollab.openConnection",
         "title": "Thiết lập kết nối",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.restoreBackup",
+        "title": "Khôi phục từ bản sao lưu",
         "category": "LAN Collab"
       }
     ],
