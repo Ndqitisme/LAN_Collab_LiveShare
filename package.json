@@ -44,7 +44,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node test/sync-plan.test.js && node --test \"test/conformance/*.test.js\"",
+    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node test/sync-plan.test.js && node test/revert.test.js && node test/history-client.test.js && node --test \"test/conformance/*.test.js\"",
     "test:conformance": "node --test \"test/conformance/*.test.js\"",
     "pretest:vscode": "npm run build:webviews",
     "test:vscode": "node test/vscode/run.js",
@@ -129,6 +129,46 @@
         "command": "lanCollab.restoreBackup",
         "title": "Khôi phục từ bản sao lưu",
         "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.showHistory",
+        "title": "Xem lịch sử chỉnh sửa",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.openAfter",
+        "title": "Mở bản sau lượt chỉnh sửa",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.diffCurrent",
+        "title": "So sánh với bản hiện tại",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.diffBefore",
+        "title": "So sánh với bản trước đó",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.copy",
+        "title": "Sao chép nội dung",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.revert",
+        "title": "Hoàn tác lượt chỉnh sửa này",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.restoreFile",
+        "title": "Khôi phục file",
+        "category": "LAN Collab"
+      },
+      {
+        "command": "lanCollab.history.restoreVersion",
+        "title": "Khôi phục phiên bản này",
+        "category": "LAN Collab"
       }
     ],
     "views": {
@@ -147,6 +187,43 @@
           "type": "webview",
           "id": "lanCollab.chat",
           "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "lanCollab.history",
+          "name": "Lịch sử chỉnh sửa"
+        }
+      ]
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "lanCollab.history.openAfter",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.diffCurrent",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.diffBefore",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.copy",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.revert",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.restoreFile",
+          "when": "false"
+        },
+        {
+          "command": "lanCollab.history.restoreVersion",
+          "when": "false"
         }
       ]
     },

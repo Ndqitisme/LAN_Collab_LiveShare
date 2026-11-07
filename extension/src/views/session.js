@@ -169,4 +169,4 @@ function connectionView(s) {
   }
 }
 
-module.exports = { SessionView };
+module.exports = { SessionView, connectionView };
