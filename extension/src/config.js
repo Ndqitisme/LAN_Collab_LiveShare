@@ -38,7 +38,11 @@ async function updateConnection(ctx, wsFolder, patch) {
     return;
   }
   const cfg = vscode.workspace.getConfiguration('lanCollab', wsFolder.uri);
-  if ('token' in patch) await cfg.update('token', patch.token, vscode.ConfigurationTarget.Global);
+  if ('token' in patch) {
+    // A token in the workspace settings overrides the user one, so the new token must replace it there.
+    const inWorkspace = cfg.inspect('token').workspaceValue !== undefined;
+    await cfg.update('token', patch.token, inWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+  }
   if ('project' in patch) await cfg.update('project', patch.project, vscode.ConfigurationTarget.Workspace);
 }
 
