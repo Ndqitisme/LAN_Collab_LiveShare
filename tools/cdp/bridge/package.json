@@ -1,0 +1,11 @@
+{
+  "name": "lan-collab-cdp-bridge",
+  "displayName": "LAN Collab CDP bridge (dev only)",
+  "description": "Loaded only by tools/cdp/vscode.mjs: runs VS Code commands sent from the driver over a loopback HTTP port.",
+  "version": "0.0.1",
+  "publisher": "ndqitisme-dev",
+  "private": true,
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "activationEvents": ["*"]
+}

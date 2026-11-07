@@ -1,7 +1,8 @@
 'use strict';
 
 // Runs test/vscode/suite.js inside a real VS Code (separate temp profile) against an in-process hub.
-// Usage: node test/vscode/run.js [path to Code.exe]
+// Usage: node test/vscode/run.js [--debug-port <n>] [path to Code.exe]
+// --debug-port opens VS Code's DevTools endpoint so tools/cdp/ can screenshot or drive the test window.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -10,7 +11,11 @@ const { startHub } = require('../../hub/hub');
 const { encodeInvite } = require('../../lib/common');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const codeExe = process.argv[2]
+const argv = process.argv.slice(2);
+const debugAt = argv.indexOf('--debug-port');
+const debugPort = debugAt >= 0 ? Number(argv.splice(debugAt, 2)[1]) : 0;
+if (debugAt >= 0 && !(debugPort > 0)) throw new Error('--debug-port needs a port number');
+const codeExe = argv[0]
   || path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 (async () => {
@@ -49,6 +54,7 @@ const codeExe = process.argv[2]
       '--skip-welcome',
       '--skip-release-notes',
       '--new-window',
+      ...(debugPort ? [`--remote-debugging-port=${debugPort}`] : []),
       folder,
     ];
     spawn(codeExe, args, { env, stdio: 'inherit' }).on('exit', (code) => resolve(code));
