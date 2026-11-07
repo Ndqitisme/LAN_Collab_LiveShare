@@ -67,22 +67,35 @@ pub struct ProjectConfig {
     pub debug: DebugHooks,
 }
 
-/// Edit-run history limits, stored for A5.
+/// Edit-run history (`history` module). Limits apply to a running project; `enabled` restarts it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct HistorySettings {
+    pub enabled: bool,
     pub idle_minutes: u32,
     pub keep_days: u32,
     pub max_mb: u64,
+    /// `--history-idle-ms`, for tests: replaces `idle_minutes`.
+    #[serde(skip)]
+    pub idle_ms: Option<u64>,
 }
 
 impl Default for HistorySettings {
     fn default() -> Self {
         HistorySettings {
+            enabled: true,
             idle_minutes: 15,
             keep_days: 30,
             max_mb: 2048,
+            idle_ms: None,
         }
+    }
+}
+
+impl HistorySettings {
+    pub fn idle_ms(&self) -> u64 {
+        self.idle_ms
+            .unwrap_or(u64::from(self.idle_minutes) * 60_000)
     }
 }
 

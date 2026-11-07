@@ -24,7 +24,7 @@ function hubCommand() {
 // opts: root, project, token, history, allowFile, exclude (array), discoveryPort, args (extra CLI arguments).
 // opts.config (a lanhub.toml path) replaces root for a hub with the multi-project feature.
 // Discovery is off unless discoveryPort is given, so parallel test files never fight over UDP 8201.
-// Resolves to {port, root, pid, logs(), waitLog(re, ms), stop()}.
+// Resolves to {port, root, pid, logs(), waitLog(re, ms), kill(), stop()}.
 function startHubProcess(opts) {
   const [cmd, ...pre] = hubCommand();
   const source = opts.config ? ['--config', opts.config] : ['--root', opts.root];
@@ -108,6 +108,12 @@ function startHubProcess(opts) {
             }, ms);
             watchers.add(w);
           });
+        },
+        // A forced kill (TerminateProcess on Windows, SIGKILL elsewhere): nothing is flushed.
+        async kill() {
+          stopping = true;
+          child.kill('SIGKILL');
+          await exited;
         },
         // Closing stdin asks the hub to write every pending file and exit 0.
         async stop() {

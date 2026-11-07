@@ -3,29 +3,34 @@
 //! Disk work goes to the project's IO thread; a handler that needs its result returns a continuation and
 //! the actor waits for it before the next message, keeping the Node hub's ordering.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lanhub_ot::{TextOperation, diff};
+use lanhub_ot::{Component, TextOperation, diff};
 use lanhub_protocol::json::{self, JsStr, Json};
 use lanhub_protocol::{
     Account, Activity, ActivityKind, ChatRejectCode, ChatRejectData, FileBody, FileContent,
-    FileInfo, FileKind, FileMessage, HubMessage, IgnoredReason, MediaReply, Presence, User,
-    Welcome, WireOp,
+    FileInfo, FileKind, FileMessage, HistoryBlobBody, HubMessage, IgnoredReason, MediaReply,
+    Presence, User, Welcome, WireOp,
 };
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, interval, sleep_until};
+use tokio::time::{Instant, Interval, MissedTickBehavior, interval, sleep_until};
 
 use crate::chat::{self, CHAT_KEEP, IMAGE_MAX, WELCOME_CHAT};
 use crate::config::{DebugHooks, HistorySettings};
 use crate::exclude::Excluder;
 use crate::files::{abs_path, uniform_eol};
 use crate::flush::{FlushSchedule, Io, IoJob, IoResult};
+use crate::history::{
+    self, Author, BlobRecord, Closed, Content, Counters, Edit, History, Job, OpenRun, Reply, Runs,
+    Source, StartBlob,
+};
+use crate::paths::safe_rel;
 use crate::presence;
 use crate::session::Conn;
 use crate::util::{base64_decode_lenient, base64_encode, log, now_ms, random_hex, sha1_hex};
@@ -283,6 +288,15 @@ pub struct Project {
     debug: DebugHooks,
     /// Read by `AdminApi` without a round trip to the actor.
     member_count: Arc<AtomicUsize>,
+    /// `None` when history is off or its store could not be opened.
+    edit_history: Option<History>,
+    history_replies: Option<mpsc::UnboundedReceiver<Reply>>,
+    runs: Runs,
+    /// When `history_changed` last went out for a path, and the paths whose next one waits for its second.
+    changed_sent: HashMap<String, Instant>,
+    changed_due: HashSet<String>,
+    /// Text files whose text the history thread holds (`history` module docs).
+    mirrored: HashSet<String>,
 }
 
 pub struct LoadedFile {
@@ -294,6 +308,7 @@ pub struct LoadedFile {
 }
 
 impl Project {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         info: Arc<ProjectInfo>,
         root: PathBuf,
@@ -301,6 +316,7 @@ impl Project {
         loaded: Vec<LoadedFile>,
         history: PathBuf,
         chat: VecDeque<Json>,
+        store: Option<history::Store>,
         debug: DebugHooks,
     ) -> Project {
         let mut files = HashMap::new();
@@ -318,7 +334,21 @@ impl Project {
             };
             files.insert(f.rel, entry);
         }
+        let (history_log, history_replies) = match store {
+            Some(store) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let h = History::start(&info.name, store, history::limits(&info.history), tx);
+                (Some(h), Some(rx))
+            }
+            None => (None, None),
+        };
         Project {
+            runs: Runs::new(info.history.idle_ms()),
+            changed_sent: HashMap::new(),
+            changed_due: HashSet::new(),
+            mirrored: HashSet::new(),
+            edit_history: history_log,
+            history_replies,
             io: Io::start(&info.name),
             info,
             root,
@@ -351,6 +381,10 @@ impl Project {
 
     pub async fn run(mut self, mut inbox: mpsc::Receiver<ActorMsg>) {
         let mut sweep = interval(Duration::from_secs(60));
+        let mut replies = self.history_replies.take();
+        let mut idle_tick = idle_interval(self.runs.idle_ms());
+        let mut changed_tick = interval(CHANGED_TICK);
+        changed_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let next_flush = self.schedule.next();
             tokio::select! {
@@ -361,8 +395,13 @@ impl Project {
                         return;
                     }
                     Some(ActorMsg::Reconfigure { info, excluder }) => {
+                        let idle = self.runs.idle_ms();
+                        self.reconfigure_history(&info);
                         self.info = info;
                         self.excluder = excluder;
+                        if self.runs.idle_ms() != idle {
+                            idle_tick = idle_interval(self.runs.idle_ms());
+                        }
                     }
                     Some(ActorMsg::Clients { reply }) => {
                         let _ = reply.send(self.members.iter().map(Member::client_info).collect());
@@ -382,6 +421,23 @@ impl Project {
                     }
                 }
                 _ = sweep.tick() => self.forget_uids(),
+                Some(reply) = next_reply(&mut replies) => {
+                    match reply {
+                        Reply::To { key, line } => self.send_line(key, line),
+                        Reply::All { line } => self.broadcast_line(line, None),
+                        Reply::Changed { path } => self.history_changed(&path),
+                    }
+                    self.close_slow();
+                }
+                _ = idle_tick.tick(), if self.edit_history.is_some() => {
+                    let closed = self.runs.expire(now_ms());
+                    self.end_runs(closed);
+                    self.close_slow();
+                }
+                _ = changed_tick.tick(), if !self.changed_due.is_empty() => {
+                    self.flush_changed();
+                    self.close_slow();
+                }
             }
         }
     }
@@ -404,8 +460,20 @@ impl Project {
         for rel in self.schedule.take_all() {
             self.flush(&rel);
         }
+        if self.edit_history.is_some() {
+            let closed = self.runs.close_all(now_ms());
+            self.end_runs(closed);
+        }
         let mut io = self.io.detach();
-        let _ = tokio::task::spawn_blocking(move || io.finish()).await;
+        // The IO thread may still hand blob runs to the history thread, so it finishes first.
+        let mut history = self.edit_history.as_mut().map(History::detach);
+        let _ = tokio::task::spawn_blocking(move || {
+            io.finish();
+            if let Some(h) = history.as_mut() {
+                h.finish();
+            }
+        })
+        .await;
     }
 
     async fn dispatch(&mut self, msg: ActorMsg) {
@@ -503,6 +571,24 @@ impl Project {
                         self.send(key, &HubMessage::Pong { ts: now_ms() });
                         None
                     }
+                    "history_list" => {
+                        self.on_history_list(key, &msg);
+                        None
+                    }
+                    "history_blob" => {
+                        self.on_history_blob(key, &msg);
+                        None
+                    }
+                    "checkpoint_create" => {
+                        self.on_checkpoint_create(key, &msg);
+                        None
+                    }
+                    "checkpoint_list" => {
+                        if let Some(h) = &self.edit_history {
+                            h.send(Job::Checkpoints { key });
+                        }
+                        None
+                    }
                     _ => None,
                 }
             }
@@ -517,14 +603,20 @@ impl Project {
     }
 
     fn send(&mut self, key: u64, msg: &HubMessage) {
-        let l = line(msg);
+        self.send_line(key, line(msg));
+    }
+
+    fn send_line(&mut self, key: u64, l: Line) {
         if let Some(m) = self.members.iter().find(|m| m.key == key) {
             Self::queue(&mut self.slow, m, l);
         }
     }
 
     fn broadcast(&mut self, msg: &HubMessage, except: Option<u64>) {
-        let l = line(msg);
+        self.broadcast_line(line(msg), except);
+    }
+
+    fn broadcast_line(&mut self, l: Line, except: Option<u64>) {
         for m in &self.members {
             if Some(m.key) != except {
                 Self::queue(&mut self.slow, m, l.clone());
@@ -680,7 +772,13 @@ impl Project {
             applied: self.last_seq.get(&me.uid).cloned().unwrap_or_default(),
             users: self.members.iter().map(Member::public).collect(),
             activity: self.activity.iter().skip(skip).cloned().collect(),
-            features: self.info.features.clone(),
+            features: {
+                let mut f = self.info.features.clone();
+                if self.edit_history.is_some() {
+                    f.push("history".to_owned());
+                }
+                f
+            },
             key: me.chat_key.clone(),
             exclude: self.info.exclude.clone(),
             chat: self
@@ -808,10 +906,14 @@ impl Project {
         };
         let op = msg.get("op").and_then(op_from_json);
         let rev = msg.get("rev").and_then(Json::as_js_integer);
-        let disk = msg.get("src").and_then(Json::as_str) == Some("disk");
+        let src = Source::from_wire(msg.get("src").and_then(Json::as_str));
+        let reverts = msg
+            .get("reverts")
+            .and_then(Json::as_str)
+            .filter(|r| src == Source::Revert && r.len() <= REVERTS_MAX);
         let applied = match (op, rev) {
             (Some(op), Some(rev)) => {
-                self.apply_op(key, &rel, op, rev, msg.get("seq").cloned(), disk)
+                self.apply_op(key, &rel, op, rev, msg.get("seq").cloned(), src, reverts)
             }
             _ => None,
         };
@@ -823,6 +925,7 @@ impl Project {
 
     /// `applyOp`: transforms `op` from `rev` to the current revision, applies it, broadcasts it, and returns
     /// the new revision; `None` when it does not fit.
+    #[allow(clippy::too_many_arguments)]
     fn apply_op(
         &mut self,
         key: u64,
@@ -830,7 +933,8 @@ impl Project {
         mut op: TextOperation,
         rev: f64,
         seq: Option<Json>,
-        disk: bool,
+        src: Source,
+        reverts: Option<&str>,
     ) -> Option<u64> {
         let Some(FileEntry::Text(f)) = self.files.get_mut(rel) else {
             return None;
@@ -845,7 +949,25 @@ impl Project {
         if op.base_length() != f.text.len() {
             return None;
         }
-        f.text = op.apply(&f.text).ok()?;
+        let text = op.apply(&f.text).ok()?;
+        let boundary = match (
+            &self.edit_history,
+            self.members.iter().find(|m| m.key == key),
+        ) {
+            (Some(h), Some(m)) => record_edit(
+                &mut self.runs,
+                &mut self.mirrored,
+                h,
+                rel,
+                m,
+                &op,
+                src,
+                reverts,
+                &f.text,
+            ),
+            _ => false,
+        };
+        f.text = text;
         f.hash = None;
         f.log.push_back(op.clone());
         f.rev += 1;
@@ -875,7 +997,10 @@ impl Project {
             },
             Some(key),
         );
-        self.note_edit(key, rel, disk);
+        self.note_edit(key, rel, src == Source::Disk);
+        if boundary {
+            self.history_changed(rel);
+        }
         Some(new_rev)
     }
 
@@ -910,6 +1035,7 @@ impl Project {
             .collect();
         for other in retired {
             self.schedule.cancel(&other);
+            self.close_path(&other);
             self.files.remove(&other);
             self.broadcast(
                 &HubMessage::Deleted {
@@ -926,7 +1052,7 @@ impl Project {
             // Someone else created it first: ours becomes an edit so both clients converge.
             let edit = (f.text != *text).then(|| (diff(&f.text, text), f.rev as f64));
             if let Some((op, rev)) = edit {
-                self.apply_op(key, &rel, op, rev, None, true);
+                self.apply_op(key, &rel, op, rev, None, Source::Disk, None);
             }
             if let Some(m) = self.text_or_missing(&rel) {
                 self.send(key, &m);
@@ -948,6 +1074,13 @@ impl Project {
         if existed {
             self.schedule.cancel(&rel);
         }
+        let record = match text {
+            Some(_) => None,
+            None => {
+                self.close_path(&rel);
+                self.blob_record(key, &rel)
+            }
+        };
         let then = Then::Created {
             key,
             rel: rel.clone(),
@@ -961,7 +1094,7 @@ impl Project {
             existed,
         };
         let abs = abs_path(&self.root, &rel);
-        self.io(|done| IoJob::Write { abs, bytes, done }, then)
+        self.io(|done| write_job(abs, bytes, done, record), then)
     }
 
     fn on_put(&mut self, key: u64, msg: &Json) -> Option<Pending> {
@@ -997,6 +1130,8 @@ impl Project {
         if self.files.contains_key(&rel) {
             self.schedule.cancel(&rel);
         }
+        self.close_path(&rel);
+        let record = self.blob_record(key, &rel);
         let then = Then::Put {
             key,
             rel: rel.clone(),
@@ -1004,15 +1139,22 @@ impl Project {
             b64: base64_encode(&bytes),
         };
         let abs = abs_path(&self.root, &rel);
-        self.io(|done| IoJob::Write { abs, bytes, done }, then)
+        self.io(|done| write_job(abs, bytes, done, record), then)
     }
 
     fn on_delete(&mut self, key: u64, msg: &Json) -> Option<Pending> {
         let rel = Self::safe_path(msg).filter(|r| self.files.contains_key(r))?;
         self.schedule.cancel(&rel);
         let abs = abs_path(&self.root, &rel);
+        let record = match self.files.get(&rel) {
+            Some(FileEntry::Blob { .. }) => self.blob_record(key, &rel),
+            _ => None,
+        };
         self.io(
-            |done| IoJob::Remove { abs, done },
+            |done| match record {
+                Some(record) => IoJob::RemoveRecorded { abs, done, record },
+                None => IoJob::Remove { abs, done },
+            },
             Then::Deleted { key, rel },
         )
     }
@@ -1235,6 +1377,9 @@ impl Project {
                     );
                     return;
                 }
+                if text.is_none() && self.edit_history.is_some() {
+                    self.history_changed(&rel);
+                }
                 let msg = match text {
                     Some(text) => {
                         self.files
@@ -1276,6 +1421,9 @@ impl Project {
                 }
                 self.files
                     .insert(rel.clone(), FileEntry::Blob { hash: hash.clone() });
+                if self.edit_history.is_some() {
+                    self.history_changed(&rel);
+                }
                 self.send(
                     key,
                     &HubMessage::Stored {
@@ -1313,6 +1461,7 @@ impl Project {
                     self.log_failure("delete", key, &e);
                     return;
                 }
+                self.record_delete(key, &rel);
                 self.files.remove(&rel);
                 if let Some(by) = self.member(key).map(|m| m.id.clone()) {
                     self.broadcast(
@@ -1326,5 +1475,360 @@ impl Project {
                 self.member_activity(key, ActivityKind::Delete, Some(rel), None);
             }
         }
+    }
+
+    // Edit-run history (`history` module).
+
+    /// At most one `history_changed` per path per `CHANGED_EVERY`: when several members type in one file,
+    /// almost every op is a run boundary, and a message per op would double the fan-out.
+    fn history_changed(&mut self, path: &str) {
+        let now = Instant::now();
+        let recent = self
+            .changed_sent
+            .get(path)
+            .is_some_and(|at| now.duration_since(*at) < CHANGED_EVERY);
+        if recent {
+            self.changed_due.insert(path.to_owned());
+            return;
+        }
+        self.changed_sent.insert(path.to_owned(), now);
+        self.broadcast(
+            &HubMessage::HistoryChanged {
+                path: path.to_owned(),
+            },
+            None,
+        );
+    }
+
+    fn flush_changed(&mut self) {
+        let now = Instant::now();
+        let ready: Vec<String> = self
+            .changed_due
+            .iter()
+            .filter(|p| {
+                self.changed_sent
+                    .get(*p)
+                    .is_none_or(|at| now.duration_since(*at) >= CHANGED_EVERY)
+            })
+            .cloned()
+            .collect();
+        for path in ready {
+            self.changed_due.remove(&path);
+            self.changed_sent.insert(path.clone(), now);
+            self.broadcast(&HubMessage::HistoryChanged { path }, None);
+        }
+        self.changed_sent
+            .retain(|_, at| now.duration_since(*at) < CHANGED_EVERY);
+    }
+
+    fn reconfigure_history(&mut self, info: &ProjectInfo) {
+        let (old, new) = (&self.info.history, &info.history);
+        self.runs.set_idle_ms(new.idle_ms());
+        if let Some(h) = &self.edit_history
+            && history::limits(old) != history::limits(new)
+        {
+            h.send(Job::Limits(history::limits(new)));
+        }
+    }
+
+    /// Sends the history thread the text of `rel` unless it already holds it.
+    fn ensure_mirror(&mut self, rel: &str) {
+        if self.mirrored.contains(rel) {
+            return;
+        }
+        if let (Some(h), Some(FileEntry::Text(t))) = (&self.edit_history, self.files.get(rel)) {
+            h.send(Job::Text {
+                path: rel.to_owned(),
+                text: Arc::from(t.text.as_slice()),
+            });
+            self.mirrored.insert(rel.to_owned());
+        }
+    }
+
+    fn forget_mirror(&mut self, rel: &str) {
+        if self.mirrored.remove(rel)
+            && let Some(h) = &self.edit_history
+        {
+            h.send(Job::Forget {
+                path: rel.to_owned(),
+            });
+        }
+    }
+
+    /// Ends runs at the file's current text, drops the mirrors they needed, and tells every member.
+    fn end_runs(&mut self, closed: Vec<Closed>) {
+        for c in closed {
+            if let Some(h) = &self.edit_history {
+                h.send(close_job(&c));
+            }
+            self.forget_mirror(&c.path);
+            self.history_changed(&c.path);
+        }
+    }
+
+    /// The file is about to be deleted, renamed or replaced: its open run ends now.
+    fn close_path(&mut self, rel: &str) {
+        if self.edit_history.is_none() {
+            return;
+        }
+        if let Some(c) = self.runs.close(rel, now_ms()) {
+            self.end_runs(vec![c]);
+        }
+    }
+
+    fn author(&self, key: u64) -> Option<Author> {
+        self.member(key).map(|m| Author {
+            uid: m.uid.to_utf8_lossy().into_owned(),
+            name: m.name.to_utf8_lossy().into_owned(),
+            color: m.color.clone(),
+        })
+    }
+
+    fn blob_record(&self, key: u64, rel: &str) -> Option<BlobRecord> {
+        Some(BlobRecord {
+            tx: self.edit_history.as_ref()?.sender()?,
+            path: rel.to_owned(),
+            author: self.author(key)?,
+            before: match self.files.get(rel) {
+                Some(FileEntry::Text(t)) => Some(String::from_utf16_lossy(&t.text).into_bytes()),
+                _ => None,
+            },
+        })
+    }
+
+    /// A deletion is a run of its own that keeps the deleted content (a blob's is recorded by the IO
+    /// thread). Called before the file leaves `files`.
+    fn record_delete(&mut self, key: u64, rel: &str) {
+        if self.edit_history.is_none() {
+            return;
+        }
+        if let Some(c) = self.runs.close(rel, now_ms())
+            && let Some(h) = &self.edit_history
+        {
+            h.send(close_job(&c));
+        }
+        let len = match self.files.get(rel) {
+            Some(FileEntry::Text(t)) => Some(t.text.len() as u64),
+            _ => None,
+        };
+        if let (Some(len), Some(author)) = (len, self.author(key)) {
+            self.ensure_mirror(rel);
+            if let Some(h) = &self.edit_history {
+                h.send(Job::Closed {
+                    path: rel.to_owned(),
+                    author,
+                    source: Source::Delete,
+                    kind: FileKind::Text,
+                    at: now_ms(),
+                    chars_removed: len,
+                    start: StartBlob::SameAsEnd,
+                    end: Content::Mirror,
+                });
+            }
+        }
+        self.forget_mirror(rel);
+        self.history_changed(rel);
+    }
+
+    fn on_history_list(&mut self, key: u64, msg: &Json) {
+        let Some(h) = &self.edit_history else { return };
+        let path = match msg.get("path") {
+            None | Some(Json::Null) => None,
+            Some(v) => match v.as_str().and_then(safe_rel) {
+                Some(p) => Some(p),
+                None => return,
+            },
+        };
+        let (before, before_text) = match msg.get("before") {
+            None | Some(Json::Null) => (None, None),
+            Some(v) => match v
+                .as_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            {
+                // Beyond i64 is newer than any id.
+                Some(s) => (
+                    Some(s.parse::<i64>().unwrap_or(i64::MAX)),
+                    Some(s.to_owned()),
+                ),
+                None => return,
+            },
+        };
+        let limit = msg
+            .get("limit")
+            .and_then(Json::as_js_integer)
+            .map_or(history::LIST_DEFAULT, |n| {
+                n.clamp(1.0, history::LIST_MAX as f64) as usize
+            });
+        h.send(Job::List {
+            key,
+            path,
+            before,
+            before_text,
+            limit,
+        });
+    }
+
+    fn on_history_blob(&mut self, key: u64, msg: &Json) {
+        let Some(h) = &self.edit_history else { return };
+        let Some(blob) = msg.get("blob").and_then(Json::as_str) else {
+            return;
+        };
+        if history::blobs::is_sha256(blob) {
+            h.send(Job::Blob {
+                key,
+                blob: blob.to_owned(),
+            });
+        } else {
+            let reply = HubMessage::HistoryBlob {
+                blob: blob.to_owned(),
+                body: HistoryBlobBody::Missing { missing: true },
+            };
+            self.send(key, &reply);
+        }
+    }
+
+    /// Ends every open run now, then records the checkpoint; the history thread sends every member the
+    /// new `checkpoint_list`.
+    fn on_checkpoint_create(&mut self, key: u64, msg: &Json) {
+        if self.edit_history.is_none() {
+            return;
+        }
+        let name = msg
+            .get("name")
+            .and_then(Json::as_js_str)
+            .map(|n| n.trim().truncate_units(history::CHECKPOINT_NAME_MAX))
+            .filter(|n| !n.is_empty());
+        let (Some(name), Some(author)) = (name, self.author(key)) else {
+            return;
+        };
+        let at = now_ms();
+        let closed = self.runs.close_all(at);
+        self.end_runs(closed);
+        if let Some(h) = &self.edit_history {
+            h.send(Job::Checkpoint {
+                name: name.to_utf8_lossy().into_owned(),
+                author,
+                at,
+            });
+        }
+    }
+}
+
+const REVERTS_MAX: usize = 64;
+const CHANGED_EVERY: Duration = Duration::from_secs(1);
+const CHANGED_TICK: Duration = Duration::from_millis(200);
+
+fn counters(run: &OpenRun) -> Counters {
+    Counters {
+        last_at: run.last_at,
+        op_count: run.op_count,
+        chars_added: run.chars_added,
+        chars_removed: run.chars_removed,
+    }
+}
+
+fn close_job(c: &Closed) -> Job {
+    Job::Close {
+        key: c.run.key,
+        path: c.path.clone(),
+        ended_at: c.ended_at,
+        counters: counters(&c.run),
+    }
+}
+
+/// Feeds one applied op to the run state machine; `before` is the text the op applies to. Returns true
+/// when a run started or ended.
+#[allow(clippy::too_many_arguments)]
+fn record_edit(
+    runs: &mut Runs,
+    mirrored: &mut HashSet<String>,
+    h: &History,
+    rel: &str,
+    m: &Member,
+    op: &TextOperation,
+    source: Source,
+    reverts: Option<&str>,
+    before: &[u16],
+) -> bool {
+    let (mut added, mut removed) = (0u64, 0u64);
+    for c in op.ops() {
+        match c {
+            Component::Insert(s) => added += s.len() as u64,
+            Component::Delete(n) => removed += *n as u64,
+            Component::Retain(_) => {}
+        }
+    }
+    let (uid, name) = (m.uid.to_utf8_lossy(), m.name.to_utf8_lossy());
+    let out = runs.edit(
+        rel,
+        Edit {
+            uid: &uid,
+            name: &name,
+            color: &m.color,
+            source,
+            reverts,
+            at: now_ms(),
+            added,
+            removed,
+        },
+    );
+    if !mirrored.contains(rel) {
+        h.send(Job::Text {
+            path: rel.to_owned(),
+            text: Arc::from(before),
+        });
+        mirrored.insert(rel.to_owned());
+    }
+    if let Some(c) = &out.closed {
+        h.send(close_job(c));
+    }
+    let run = runs.get(rel).expect("an edit leaves its run open");
+    if out.opened {
+        h.send(Job::Open {
+            key: run.key,
+            path: rel.to_owned(),
+            author: run.author.clone(),
+            source: run.source,
+            reverts: run.reverts.clone(),
+            started_at: run.started_at,
+        });
+    }
+    h.send(Job::Op {
+        key: run.key,
+        path: rel.to_owned(),
+        op: op.clone(),
+        counters: counters(run),
+    });
+    out.closed.is_some() || out.opened
+}
+
+fn write_job(
+    abs: PathBuf,
+    bytes: Vec<u8>,
+    done: oneshot::Sender<IoResult<Vec<u8>>>,
+    record: Option<BlobRecord>,
+) -> IoJob {
+    match record {
+        Some(record) => IoJob::WriteRecorded {
+            abs,
+            bytes,
+            done,
+            record,
+        },
+        None => IoJob::Write { abs, bytes, done },
+    }
+}
+
+/// How often idle runs are looked for: a quarter of the idle time, between 50 ms and 30 s.
+fn idle_interval(idle_ms: u64) -> Interval {
+    let mut i = interval(Duration::from_millis((idle_ms / 4).clamp(50, 30_000)));
+    i.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    i
+}
+
+async fn next_reply(rx: &mut Option<mpsc::UnboundedReceiver<Reply>>) -> Option<Reply> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
     }
 }

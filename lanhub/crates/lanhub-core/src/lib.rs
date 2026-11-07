@@ -11,6 +11,7 @@ pub mod exclude;
 pub mod files;
 pub mod flush;
 pub mod framing;
+pub mod history;
 pub mod http_diag;
 pub mod identity;
 pub mod invite;
@@ -42,6 +43,10 @@ pub struct HubConfig {
     pub token: String,
     pub allow_file: Option<PathBuf>,
     pub history: Option<PathBuf>,
+    /// `--no-history`.
+    pub no_history: bool,
+    /// `--history-idle-ms`.
+    pub history_idle_ms: Option<u64>,
     pub exclude: Vec<String>,
     pub name: Option<String>,
     /// UDP discovery port; `None` binds no UDP socket (`--no-discovery`).
@@ -108,6 +113,8 @@ pub async fn start(cfg: HubConfig) -> std::io::Result<Hub> {
         .as_deref()
         .map(std::path::absolute)
         .transpose()?;
+    project.history.enabled = !cfg.no_history;
+    project.history.idle_ms = cfg.history_idle_ms;
     project.exclude = cfg.exclude;
     project.debug.panic_path = cfg.panic_path;
     let config = Config {

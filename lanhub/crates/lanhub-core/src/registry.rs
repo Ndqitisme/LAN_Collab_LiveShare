@@ -165,7 +165,10 @@ pub struct Registry {
 
 /// A restart is needed when the actor's files or folders change; everything else is applied live.
 fn needs_restart(old: &ProjectConfig, new: &ProjectConfig) -> bool {
-    old.root != new.root || old.history_dir != new.history_dir || old.debug != new.debug
+    old.root != new.root
+        || old.history_dir != new.history_dir
+        || old.history.enabled != new.history.enabled
+        || old.debug != new.debug
 }
 
 fn exclude_patterns(cfg: &ProjectConfig) -> Vec<String> {
@@ -591,8 +594,9 @@ impl Registry {
         let exclude = exclude_patterns(cfg);
         let excluder = Excluder::new(&exclude);
         let legacy = cfg.history_dir.is_none();
-        let (id, loaded, chat, excluder) = tokio::task::spawn_blocking({
-            let (root, history) = (root.clone(), history.clone());
+        let keep_history = cfg.history.enabled;
+        let (id, loaded, chat, excluder, store) = tokio::task::spawn_blocking({
+            let (root, history, name) = (root.clone(), history.clone(), cfg.name.clone());
             move || -> io::Result<_> {
                 if legacy {
                     move_legacy_history(&root, &history);
@@ -600,7 +604,32 @@ impl Registry {
                 let id = identity::load(&root)?;
                 let loaded = load_files(&root, &excluder);
                 let chat = chat::load(&chat::log_path(&history));
-                Ok((id, loaded, chat, excluder))
+                let store = if keep_history {
+                    match crate::history::open(&history, &loaded) {
+                        Ok((s, ended)) => {
+                            if ended > 0 {
+                                log_in(
+                                    Some(&name),
+                                    &format!("Lịch sử: đã đóng {ended} lượt còn mở từ lần chạy trước"),
+                                );
+                            }
+                            Some(s)
+                        }
+                        Err(e) => {
+                            log_in(
+                                Some(&name),
+                                &format!(
+                                    "[CẢNH BÁO] không mở được lịch sử chỉnh sửa ở {}: {e}. Dự án vẫn chạy nhưng không ghi lịch sử.",
+                                    history.display()
+                                ),
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok((id, loaded, chat, excluder, store))
             }
         })
         .await
@@ -616,6 +645,7 @@ impl Registry {
             loaded,
             history,
             chat,
+            store,
             cfg.debug.clone(),
         );
         let members = project.member_count();

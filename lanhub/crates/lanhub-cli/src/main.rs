@@ -7,7 +7,7 @@ use lanhub_core::config::{self, Config, HubSettings, TlsSettings};
 use lanhub_core::diagnose::{self, Status};
 use lanhub_core::{Hub, HubConfig, identity, logs};
 
-const USAGE: &str = "Dùng: lanhub-cli [--config lanhub.toml] [--port 8200] [--host 0.0.0.0] [--name TÊN_HUB] [--log-format json] [--stop-on-stdin-close] [--discovery-port 8201] [--no-discovery]
+const USAGE: &str = "Dùng: lanhub-cli [--config lanhub.toml] [--port 8200] [--host 0.0.0.0] [--name TÊN_HUB] [--log-format json] [--stop-on-stdin-close] [--discovery-port 8201] [--no-discovery] [--no-history] [--history-idle-ms N]
   hoặc một dự án: lanhub-cli --root <thư mục dự án> [--project TÊN] [--token BÍ_MẬT] [--history DIR] [--allow-file FILE] [--exclude \"a,b\"] [--tls | --tls-cert CERT.pem --tls-key KEY.pem] cùng các tham số trên
   tự kiểm tra (chỉ đọc): lanhub-cli --diagnose [--config lanhub.toml | --root <thư mục>] [--port 8200] [--host 0.0.0.0] [--discovery-port 8201] [--no-discovery] [--tls]";
 const WATCH_EVERY: Duration = Duration::from_millis(100);
@@ -49,6 +49,8 @@ struct Overrides {
     discovery_port: Option<Option<u16>>,
     /// Debug builds: `LANHUB_DEBUG_CRASH=<project>:<path>` sets that project's crash hook.
     crash: Option<(String, String)>,
+    no_history: bool,
+    history_idle_ms: Option<u64>,
 }
 
 impl Overrides {
@@ -74,6 +76,14 @@ impl Overrides {
 
     fn apply(&self, mut cfg: Config) -> Config {
         self.apply_hub(&mut cfg.hub);
+        for p in &mut cfg.projects {
+            if self.no_history {
+                p.history.enabled = false;
+            }
+            if self.history_idle_ms.is_some() {
+                p.history.idle_ms = self.history_idle_ms;
+            }
+        }
         if let Some((project, path)) = &self.crash {
             for p in &mut cfg.projects {
                 if p.name.to_lowercase() == project.to_lowercase() {
@@ -141,6 +151,17 @@ fn main() -> ExitCode {
         return run_diagnose(&a, port, discovery_port, tls);
     }
     let json_log = value("log-format").as_deref() == Some("json");
+    let no_history = a.contains_key("no-history");
+    let history_idle_ms = match value("history-idle-ms") {
+        None => None,
+        Some(v) => match v.parse::<u64>() {
+            Ok(ms) => Some(ms),
+            Err(_) => {
+                eprintln!("Không mở được hub: --history-idle-ms không hợp lệ \"{v}\"");
+                return ExitCode::from(1);
+            }
+        },
+    };
     let stop_on_stdin_close = a.contains_key("stop-on-stdin-close");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -169,6 +190,8 @@ fn main() -> ExitCode {
             name: value("name"),
             discovery_port,
             crash,
+            no_history,
+            history_idle_ms,
         };
         return runtime.block_on(serve_config(file, overrides, json_log, stop_on_stdin_close));
     };
@@ -182,6 +205,8 @@ fn main() -> ExitCode {
             .unwrap_or_default(),
         allow_file: value("allow-file").map(Into::into),
         history: value("history").map(Into::into),
+        no_history,
+        history_idle_ms,
         exclude: value("exclude")
             .map(|e| e.split(',').map(str::to_owned).collect())
             .unwrap_or_default(),
@@ -221,6 +246,8 @@ fn run_diagnose(
         name: None,
         discovery_port,
         crash: None,
+        no_history: false,
+        history_idle_ms: None,
     };
     let source = match value("root") {
         Some(root) => {

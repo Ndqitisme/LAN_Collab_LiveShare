@@ -188,6 +188,25 @@ pub enum ClientMessage {
         id: String,
     },
     Ping {},
+    /// Section 12.1. Without `path`, the runs of every file.
+    HistoryList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        before: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        limit: Option<u32>,
+    },
+    HistoryBlob {
+        blob: String,
+    },
+    CheckpointCreate {
+        name: String,
+    },
+    CheckpointList {},
 }
 
 /// One entry of `welcome.files`. Blobs have `rev` 0.
@@ -358,6 +377,63 @@ pub enum MediaReply {
     },
 }
 
+/// One edit run (section 12.2). Times are hub milliseconds since the Unix epoch; character counts are
+/// UTF-16 code units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RunRecord {
+    pub id: String,
+    pub path: String,
+    pub author_uid: String,
+    pub author_name: String,
+    pub color: String,
+    /// `editor`, `disk`, `revert`, `merge` or `delete`.
+    pub source: String,
+    pub kind: FileKind,
+    pub started_at: u64,
+    /// For an open run, the time of its latest op so far.
+    pub ended_at: u64,
+    pub op_count: u64,
+    pub chars_added: u64,
+    pub chars_removed: u64,
+    pub start_blob: Option<String>,
+    /// `null` while the run is open.
+    pub end_blob: Option<String>,
+    pub reverts: Option<String>,
+    pub open: bool,
+}
+
+/// A restore point (section 12.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CheckpointRecord {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub author_uid: String,
+    pub author_name: String,
+    pub color: String,
+    /// The newest run id when the checkpoint was made; every run closed by then has an id up to this one.
+    pub last_run: Option<String>,
+}
+
+/// The body of a `history_blob` reply after `blob`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(untagged)]
+#[ts(export)]
+pub enum HistoryBlobBody {
+    Content(HistoryBlobContent),
+    Missing { missing: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+#[ts(export)]
+pub enum HistoryBlobContent {
+    Text { text: String },
+    Blob { b64: String },
+}
+
 /// Messages the hub sends (section 6).
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -437,6 +513,24 @@ pub enum HubMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional, as = "Option<BTreeMap<String, Json>>")]
         data: Option<Json>,
+    },
+    /// Answer to `history_list`; `path` and `before` echo the request (`null` when absent).
+    HistoryRuns {
+        path: Option<String>,
+        before: Option<String>,
+        runs: Vec<RunRecord>,
+        more: bool,
+    },
+    HistoryBlob {
+        blob: String,
+        #[serde(flatten)]
+        body: HistoryBlobBody,
+    },
+    HistoryChanged {
+        path: String,
+    },
+    CheckpointList {
+        checkpoints: Vec<CheckpointRecord>,
     },
 }
 
