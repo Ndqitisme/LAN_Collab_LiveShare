@@ -32,7 +32,8 @@ const BASE_SETTINGS = {
   'workbench.enableExperiments': false,
   'workbench.secondarySideBar.defaultVisibility': 'hidden',
   'chat.disableAIFeatures': true,
-  'telemetry.telemetryLevel': 'off',
+  // With telemetry fully off VS Code hands every profile the same machineId, so two members would look like one.
+  'telemetry.telemetryLevel': 'crash',
   'update.mode': 'none',
   'extensions.autoCheckUpdates': false,
   'extensions.autoUpdate': false,
@@ -111,7 +112,6 @@ export async function launch(opts = {}) {
     '--disable-workspace-trust',
     '--skip-welcome',
     '--skip-release-notes',
-    '--disable-telemetry',
     '--new-window',
     ...(opts.args || []),
     folder,
