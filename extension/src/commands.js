@@ -54,6 +54,7 @@ async function menu(app) {
     items.push({ label: `$(plug) ${t('menu.connect')}`, run: () => connect(app) });
     items.push({ label: `$(key) ${t('menu.join')}`, run: () => join(app) });
   }
+  items.push({ label: `$(settings-gear) ${t('menu.openConnection')}`, run: () => vscode.commands.executeCommand('lanCollab.openConnection') });
   items.push({ label: `$(pulse) ${t('menu.diagnose')}`, run: () => vscode.commands.executeCommand('lanCollab.diagnose') });
   items.push({ label: `$(account) ${t('menu.signIn')}`, run: () => signIn(app) });
   items.push({ label: `$(output) ${t('menu.showLog')}`, run: () => app.out.show() });

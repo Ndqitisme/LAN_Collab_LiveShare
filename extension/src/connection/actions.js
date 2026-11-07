@@ -59,7 +59,7 @@ async function copyEntry(entry) {
 function runAction(app, id, s) {
   switch (id) {
     case 'join': return join(app);
-    case 'open_settings': return vscode.commands.executeCommand('workbench.action.openWorkspaceSettings', 'lanCollab');
+    case 'open_settings': return vscode.commands.executeCommand('lanCollab.openConnection');
     case 'paste_invite': return pasteInvite(app);
     case 'enter_token': return enterToken(app);
     case 'choose_project': return chooseProject(app, s);
@@ -68,7 +68,7 @@ function runAction(app, id, s) {
     case 'copy_entry': return copyEntry(String(s.data.entry || ''));
     case 'update_extension': return vscode.commands.executeCommand('extension.open', EXTENSION_ID);
     case 'reconnect': return app.controller.reconnect();
-    default: return vscode.commands.executeCommand('lanCollab.diagnose');
+    default: return vscode.commands.executeCommand('lanCollab.openConnection', { diagnose: true });
   }
 }
 

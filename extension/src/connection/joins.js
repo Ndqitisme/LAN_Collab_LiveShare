@@ -45,4 +45,9 @@ async function update(globalState, key, patch) {
   if (r) await put(globalState, key, { ...r, ...patch });
 }
 
-module.exports = { KEY, fromInvite, fromV1, all, get, legacyToken, put, update };
+async function remove(globalState, key) {
+  const { [key]: gone, ...rest } = all(globalState);
+  if (gone) await globalState.update(KEY, rest);
+}
+
+module.exports = { KEY, fromInvite, fromV1, all, get, legacyToken, put, update, remove };

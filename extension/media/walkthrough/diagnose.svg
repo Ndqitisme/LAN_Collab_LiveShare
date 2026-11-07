@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="80" y="40" width="240" height="220" rx="14" stroke="var(--vscode-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <circle cx="122" cy="90" r="16" stroke="var(--vscode-testing-iconPassed, var(--vscode-textLink-foreground))" stroke-width="4"/>
+  <path d="M114 90l6 6 10-12" stroke="var(--vscode-testing-iconPassed, var(--vscode-textLink-foreground))" stroke-width="4"/>
+  <path d="M156 90h130" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+  <circle cx="122" cy="150" r="16" stroke="var(--vscode-testing-iconPassed, var(--vscode-textLink-foreground))" stroke-width="4"/>
+  <path d="M114 150l6 6 10-12" stroke="var(--vscode-testing-iconPassed, var(--vscode-textLink-foreground))" stroke-width="4"/>
+  <path d="M156 150h100" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+  <circle cx="122" cy="210" r="16" stroke="var(--vscode-editorWarning-foreground)" stroke-width="4"/>
+  <path d="M122 202v9M122 218v1" stroke="var(--vscode-editorWarning-foreground)" stroke-width="4"/>
+  <path d="M156 210h120" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+</svg>

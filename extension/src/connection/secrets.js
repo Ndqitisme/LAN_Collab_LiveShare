@@ -21,6 +21,10 @@ async function setToken(secrets, folderKey, token) {
   await secrets.store(secretKey(folderKey), token);
 }
 
+async function deleteToken(secrets, folderKey) {
+  await secrets.delete(secretKey(folderKey));
+}
+
 async function storeVerified(secrets, folderKey, token) {
   await setToken(secrets, folderKey, token);
   return (await getToken(secrets, folderKey)) === token;
@@ -49,4 +53,4 @@ async function migrateTokens({ globalState, secrets, settingsFolderKey, setting,
   return moved;
 }
 
-module.exports = { SETTINGS_KEY, secretKey, getToken, setToken, migrateTokens };
+module.exports = { SETTINGS_KEY, secretKey, getToken, setToken, deleteToken, migrateTokens };

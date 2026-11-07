@@ -2,7 +2,8 @@
 // Scans every .js file under extension/ and lib/, and the .ts and .svelte webview sources under
 // extension/webview-src/ (not their tests, and not the built extension/webview/dist/). Exempt: comments and the
 // arguments of log() calls, which write to the output channel. package.json cannot read the catalog, so each manifest caption must equal its
-// catalog entry instead (command.<id>.title, view.<id>.name, setting.<key>.description, package.description).
+// catalog entry instead (command.<id>.title, view.<id>.name, setting.<key>.description, package.description,
+// viewsWelcome.<view>.contents, walkthrough.<id>.title|description, walkthrough.<id>.step.<step>.title|description|altText).
 // Usage: node tools/check-strings.mjs [repo root]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -221,6 +222,16 @@ export function manifestEntries(pkg) {
   }
   for (const [key, prop] of Object.entries((c.configuration && c.configuration.properties) || {})) {
     entries.push({ where: `setting ${key}`, id: `setting.${key}.description`, value: prop.markdownDescription ?? prop.description });
+  }
+  for (const w of c.viewsWelcome || []) entries.push({ where: `viewsWelcome ${w.view}`, id: `viewsWelcome.${w.view}.contents`, value: w.contents });
+  for (const w of c.walkthroughs || []) {
+    const id = `walkthrough.${w.id}`;
+    entries.push({ where: `walkthrough ${w.id} title`, id: `${id}.title`, value: w.title }, { where: `walkthrough ${w.id} description`, id: `${id}.description`, value: w.description });
+    for (const s of w.steps || []) {
+      entries.push({ where: `walkthrough ${w.id} step ${s.id} title`, id: `${id}.step.${s.id}.title`, value: s.title });
+      entries.push({ where: `walkthrough ${w.id} step ${s.id} description`, id: `${id}.step.${s.id}.description`, value: s.description });
+      if (s.media && s.media.altText !== undefined) entries.push({ where: `walkthrough ${w.id} step ${s.id} altText`, id: `${id}.step.${s.id}.altText`, value: s.media.altText });
+    }
   }
   return entries;
 }

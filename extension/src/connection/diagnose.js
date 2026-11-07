@@ -102,4 +102,4 @@ function registerDiagnose(app) {
   );
 }
 
-module.exports = { registerDiagnose, runDiagnosis };
+module.exports = { registerDiagnose, runDiagnosis, environmentInfo };

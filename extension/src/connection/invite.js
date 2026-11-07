@@ -117,4 +117,4 @@ async function copyInvite(app) {
   vscode.window.showInformationMessage(t('invite.copied'));
 }
 
-module.exports = { join, pasteInvite, copyInvite };
+module.exports = { join, pasteInvite, copyInvite, decodeAny, inviteProblem };

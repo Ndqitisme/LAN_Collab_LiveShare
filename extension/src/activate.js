@@ -10,6 +10,7 @@ const { showDownloadProgress } = require('./connection/sync-ui');
 const { registerCommands } = require('./commands');
 const { StatusBar } = require('./status-bar');
 const { SessionView } = require('./views/session');
+const { ConnectionPanel } = require('./views/connection');
 const { Editors } = require('./editors');
 const { Decorations } = require('./decorations');
 const { Presence } = require('./presence');
@@ -31,6 +32,7 @@ function activate(context) {
   app.follow = new Follow(app);
   app.session = new SessionView(app);
   app.statusBar = new StatusBar(app);
+  app.connectionPanel = new ConnectionPanel(app);
   app.chatView = new ChatView({
     core: () => app.controller.core,
     extensionUri: context.extensionUri,
@@ -50,7 +52,8 @@ function activate(context) {
     controller.onDidChange(({ prev, state }) => {
       statusBar.render();
       session.refresh();
-      if (state.name === 'needs_action' && prev.name !== 'needs_action') showNeedsAction(app, state);
+      // The open connection panel already shows the reason and its actions.
+      if (state.name === 'needs_action' && prev.name !== 'needs_action' && !app.connectionPanel.visible) showNeedsAction(app, state);
     }),
     controller.onDidChangeCore((core) => (core ? wireCore(core) : coreGone())),
     vscode.workspace.onDidChangeConfiguration((e) => controller.onConfigChanged(e)),

@@ -272,6 +272,23 @@ test('replies from several addresses of one hub are all tried, so a first reply 
   won.socket.destroy();
 });
 
+test('discoverAll lists every hub that answers, one row per instanceId with all its addresses, as replies arrive', async () => {
+  const udp = fakeDgram((addr) => ({
+    '192.168.5.255': { from: '192.168.5.40', port: 9300, instanceId: 'I1', after: 1 },
+    '127.0.0.1': { from: '127.0.0.1', port: 9300, instanceId: 'I1', after: 20 },
+    '10.0.0.1': { from: '10.0.0.1', port: 8200, instanceId: 'I2', after: 10 },
+  }[addr] || null));
+  const seen = [];
+  const { hubs, sentTo, error } = await D.discoverAll(['127.0.0.1', '10.0.0.1'], { ...D.defaultEnv(), ...FAST, dgram: udp }, (h) => seen.push(`${h.instanceId}:${h.hosts.join(',')}`));
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(sentTo, ['192.168.5.255', '127.0.0.1', '10.0.0.1']);
+  assert.deepStrictEqual(seen, ['I1:192.168.5.40', 'I2:10.0.0.1', 'I1:192.168.5.40,127.0.0.1']);
+  assert.deepStrictEqual(hubs, [
+    { instanceId: 'I1', hosts: ['192.168.5.40', '127.0.0.1'], port: 9300, tls: false, hubName: 'stub', projects: ['Demo'] },
+    { instanceId: 'I2', hosts: ['10.0.0.1'], port: 8200, tls: false, hubName: 'stub', projects: ['Demo'] },
+  ]);
+});
+
 test('resolve() skips rediscovery without an instanceId and reports that it ran when it did', async () => {
   const udp = fakeDgram(() => null);
   await assert.rejects(D.resolve(target({ instanceId: null }), { ...FAST, net: fakeNet({}), dgram: udp }), (e) => e.code === 'refused' && !e.data.discovery);
