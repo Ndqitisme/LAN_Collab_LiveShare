@@ -15,13 +15,14 @@ use lanhub_protocol::{
     Account, Activity, ActivityKind, FileBody, FileContent, FileInfo, FileKind, FileMessage,
     HubMessage, IgnoredReason, Presence, User, Welcome, WireOp,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval, sleep_until};
 
 use crate::exclude::Excluder;
 use crate::files::{abs_path, uniform_eol};
 use crate::flush::{FlushSchedule, Io, IoJob, IoResult};
 use crate::presence;
+use crate::session::Conn;
 use crate::util::{base64_decode_lenient, base64_encode, log, now_ms, random_hex, sha1_hex};
 
 const COLORS: [&str; 10] = [
@@ -40,19 +41,6 @@ pub type Line = Arc<[u8]>;
 
 pub fn line(msg: &HubMessage) -> Line {
     json::to_line(msg).into()
-}
-
-/// What the actor holds of a connection: its outgoing queue and the switch that closes it.
-#[derive(Clone)]
-pub struct Conn {
-    pub tx: mpsc::Sender<Line>,
-    pub close: Arc<watch::Sender<bool>>,
-}
-
-impl Conn {
-    pub fn close(&self) {
-        let _ = self.close.send(true);
-    }
 }
 
 /// Facts about the project that sessions need for the handshake, fixed while it runs.
@@ -439,12 +427,10 @@ impl Project {
         }
     }
 
-    /// A member whose queue is full is too slow to keep: it is closed rather than waited for, so one slow
-    /// link never holds up the project.
+    /// A member too slow to keep is closed rather than waited for, so one slow link never holds up the
+    /// project.
     fn queue(slow: &mut Vec<u64>, m: &Member, l: Line) {
-        if let Err(mpsc::error::TrySendError::Full(_)) = m.conn.tx.try_send(l)
-            && !slow.contains(&m.key)
-        {
+        if !m.conn.send(l) && !slow.contains(&m.key) {
             slow.push(m.key);
         }
     }

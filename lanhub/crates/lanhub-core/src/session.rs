@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lanhub_protocol::json::{self, JsStr, Json};
@@ -16,21 +17,62 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, sleep_until};
 
 use crate::framing::{LineDecoder, MAX_LINE, PREAUTH_MAX_LINE, Tail};
-use crate::project::{ActorMsg, Conn, JoinRequest, Line, ProjectInfo, line};
+use crate::project::{ActorMsg, JoinRequest, Line, ProjectInfo, line};
 use crate::util::{log, now_ms, random_uuid, sha1_hex};
 
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(5);
-/// Messages a member may have queued before it counts as too slow and is closed.
-pub const SEND_QUEUE: usize = 4096;
+/// A member whose queue holds more than this, or whose socket accepted nothing for `STALL_MS` while data
+/// waited, is too slow to keep. Counting bytes rather than messages lets a first sync queue thousands of
+/// files without tripping it; the limit sits above `MAX_LINE`, the largest single message.
+pub const MAX_QUEUED_BYTES: usize = 512 * 1024 * 1024;
+pub const STALL_MS: u64 = 30_000;
 const READ_CHUNK: usize = 64 * 1024;
 const COALESCE: usize = 64 * 1024;
+const WRITE_CHUNK: usize = 256 * 1024;
 
 /// The project a connection talks to: its fixed facts and the actor's inbox.
 #[derive(Clone)]
 pub struct ProjectHandle {
     pub info: Arc<ProjectInfo>,
     pub inbox: mpsc::Sender<ActorMsg>,
+}
+
+#[derive(Default)]
+struct Backlog {
+    bytes: AtomicUsize,
+    /// When the writer last made progress, or when the queue last became non-empty (ms since epoch).
+    since: AtomicU64,
+}
+
+/// What the project holds of a connection: its outgoing queue and the switch that closes it.
+#[derive(Clone)]
+pub struct Conn {
+    tx: mpsc::UnboundedSender<Line>,
+    backlog: Arc<Backlog>,
+    close: Arc<watch::Sender<bool>>,
+}
+
+impl Conn {
+    /// Queues a line. `false` means the member is too slow to keep; the line is dropped.
+    pub fn send(&self, l: Line) -> bool {
+        let now = now_ms();
+        let queued = self.backlog.bytes.load(Ordering::Acquire);
+        let stalled = now.saturating_sub(self.backlog.since.load(Ordering::Acquire)) > STALL_MS;
+        if queued > 0 && (queued > MAX_QUEUED_BYTES || stalled) {
+            return false;
+        }
+        if self.backlog.bytes.fetch_add(l.len(), Ordering::AcqRel) == 0 {
+            self.backlog.since.store(now, Ordering::Release);
+        }
+        // An error means the writer is gone and the session is ending; its Leave follows.
+        let _ = self.tx.send(l);
+        true
+    }
+
+    pub fn close(&self) {
+        let _ = self.close.send(true);
+    }
 }
 
 enum Hello {
@@ -165,13 +207,14 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
     let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(10));
     let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive);
     let (mut rd, wr) = stream.into_split();
-    let (tx, rx) = mpsc::channel::<Line>(SEND_QUEUE);
+    let (tx, rx) = mpsc::unbounded_channel::<Line>();
     let (close_tx, mut close_rx) = watch::channel(false);
     let conn = Conn {
         tx,
+        backlog: Arc::default(),
         close: Arc::new(close_tx),
     };
-    tokio::spawn(write_loop(wr, rx, conn.close.clone()));
+    tokio::spawn(write_loop(wr, rx, conn.backlog.clone(), conn.close.clone()));
 
     let mut dec = LineDecoder::new(PREAUTH_MAX_LINE);
     let mut joined = false;
@@ -213,7 +256,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
             }
             match hello(&project.info, &m, key, &conn, &addr) {
                 Hello::Refuse(l) => {
-                    let _ = conn.tx.try_send(l);
+                    conn.send(l);
                     break 'conn;
                 }
                 Hello::Accept(req) => {
@@ -240,7 +283,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
                 if joined && last_keepalive.is_none_or(|t| t.elapsed() > KEEPALIVE_EVERY) =>
             {
                 last_keepalive = Some(Instant::now());
-                let _ = conn.tx.try_send(line(&HubMessage::Pong { ts: now_ms() }));
+                conn.send(line(&HubMessage::Pong { ts: now_ms() }));
             }
             _ => {}
         }
@@ -254,7 +297,8 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
 /// queue drains, then a FIN), or at once when the connection is closed.
 async fn write_loop(
     mut wr: OwnedWriteHalf,
-    mut rx: mpsc::Receiver<Line>,
+    mut rx: mpsc::UnboundedReceiver<Line>,
+    backlog: Arc<Backlog>,
     close: Arc<watch::Sender<bool>>,
 ) {
     let mut close_rx = close.subscribe();
@@ -284,14 +328,19 @@ async fn write_loop(
             }
             &batch
         };
-        let written = tokio::select! {
-            biased;
-            _ = closed(&mut close_rx) => return,
-            r = wr.write_all(data) => r,
-        };
-        if written.is_err() {
-            let _ = close.send(true);
-            return;
+        // Progress is noted per chunk, so a large file going out over a slow link never looks stalled.
+        for chunk in data.chunks(WRITE_CHUNK) {
+            let written = tokio::select! {
+                biased;
+                _ = closed(&mut close_rx) => return,
+                r = wr.write_all(chunk) => r,
+            };
+            if written.is_err() {
+                let _ = close.send(true);
+                return;
+            }
+            backlog.since.store(now_ms(), Ordering::Release);
         }
+        backlog.bytes.fetch_sub(data.len(), Ordering::AcqRel);
     }
 }
