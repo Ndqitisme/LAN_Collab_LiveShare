@@ -6,6 +6,7 @@ const { ACTIVE } = require('../../lib/connection-machine');
 const { join, copyInvite } = require('./connection/invite');
 const { signIn } = require('./connection/account');
 const { actionLabel, runAction } = require('./connection/actions');
+const { registerDiagnose } = require('./connection/diagnose');
 
 function connect(app) {
   const s = app.controller.state;
@@ -53,6 +54,7 @@ async function menu(app) {
     items.push({ label: `$(plug) ${t('menu.connect')}`, run: () => connect(app) });
     items.push({ label: `$(key) ${t('menu.join')}`, run: () => join(app) });
   }
+  items.push({ label: `$(pulse) ${t('menu.diagnose')}`, run: () => vscode.commands.executeCommand('lanCollab.diagnose') });
   items.push({ label: `$(account) ${t('menu.signIn')}`, run: () => signIn(app) });
   items.push({ label: `$(output) ${t('menu.showLog')}`, run: () => app.out.show() });
   const pick = await vscode.window.showQuickPick(items, { placeHolder: t('menu.placeholder') });
@@ -73,6 +75,7 @@ function registerCommands(app) {
   cmd('lanCollab.signIn', () => signIn(app));
   cmd('lanCollab.join', (code) => join(app, code));
   cmd('lanCollab.copyInvite', () => copyInvite(app));
+  registerDiagnose(app);
 }
 
 module.exports = { registerCommands };

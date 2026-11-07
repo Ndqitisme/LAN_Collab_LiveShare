@@ -3,7 +3,7 @@
 // Captions and handlers for the action ids a needs_action state carries (lib/connection-machine.js).
 const vscode = require('vscode');
 const { t } = require('../../../lib/i18n');
-const { hubErrorText } = require('../../../lib/client-core');
+const { problemText } = require('../../../lib/diagnostics');
 const config = require('../config');
 const { join, pasteInvite } = require('./invite');
 const { signIn } = require('./account');
@@ -30,7 +30,7 @@ function reasonText(s) {
   if (s.code === 'no_folder') return t('connect.noFolder');
   if (s.code === 'unbound') return t('connect.unbound');
   // A protocol 1 hub refuses with its own sentence.
-  return typeof s.data.message === 'string' ? s.data.message : hubErrorText(s.code, s.data);
+  return typeof s.data.message === 'string' ? s.data.message : problemText(s.code, s.data);
 }
 
 async function enterToken(app) {
@@ -68,8 +68,7 @@ function runAction(app, id, s) {
     case 'copy_entry': return copyEntry(String(s.data.entry || ''));
     case 'update_extension': return vscode.commands.executeCommand('extension.open', EXTENSION_ID);
     case 'reconnect': return app.controller.reconnect();
-    // Until the connection diagnostics command exists, the log holds the raw socket errors and refusal codes.
-    default: return app.out.show();
+    default: return vscode.commands.executeCommand('lanCollab.diagnose');
   }
 }
 

@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { t } = require('../../../lib/i18n');
 const { ACTIVE } = require('../../../lib/connection-machine');
-const { encodeInvite, decodeInvite } = require('../../../lib/common');
+const { encodeInvite, decodeInvite, encodeInviteV3, decodeInviteV3 } = require('../../../lib/common');
 const config = require('../config');
 const { probe } = require('./probe');
 
@@ -17,14 +17,24 @@ function isEmptyDir(p) {
   }
 }
 
+// Either code form as {instanceId, hosts, port, project, token, fingerprint?}; a legacy LC- code has one host and
+// no instanceId.
+function decodeAny(code) {
+  const v3 = decodeInviteV3(code);
+  if (v3) return v3;
+  const v2 = decodeInvite(code);
+  return v2 && { instanceId: null, hosts: [v2.host], port: v2.port, project: v2.project, token: v2.token };
+}
+
 // The input box message for a pasted code, or null when it decodes or nothing is typed yet.
 function inviteProblem(value) {
   const code = String(value || '').replace(/\s+/g, '');
-  if (!code || decodeInvite(code)) return null;
+  if (!code || decodeAny(code)) return null;
   return /^LC3?-/.test(code) ? t('join.input.unreadable') : t('join.input.badPrefix');
 }
 
-// A decoded invite the hub accepts, or null after telling the member why not.
+// {inv, reached}: a decoded invite the hub accepts and the address that answered, or null after telling the
+// member why not.
 async function askInvite(app, codeArg) {
   const code = typeof codeArg === 'string' ? codeArg : await vscode.window.showInputBox({
     prompt: t('join.input.prompt'),
@@ -33,14 +43,15 @@ async function askInvite(app, codeArg) {
     validateInput: inviteProblem,
   });
   if (!code) return null;
-  const conn = decodeInvite(code);
-  if (!conn) return null;
-  const err = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('join.progress.probe', { host: conn.host, port: conn.port }) }, () => probe(conn, app.log));
-  if (err) {
-    vscode.window.showErrorMessage(err);
+  const inv = decodeAny(code);
+  if (!inv) return null;
+  const title = t('join.progress.probe', { host: inv.hosts[0], port: inv.port });
+  const reached = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => probe(inv, app.log));
+  if (reached.error) {
+    vscode.window.showErrorMessage(reached.error);
     return null;
   }
-  return conn;
+  return { inv, reached };
 }
 
 async function join(app, codeArg) {
@@ -49,15 +60,16 @@ async function join(app, codeArg) {
     vscode.window.showWarningMessage(s.target ? t('join.error.connected', { project: s.target.project }) : t('connect.busy'));
     return;
   }
-  const conn = await askInvite(app, codeArg);
-  if (!conn) return;
+  const asked = await askInvite(app, codeArg);
+  if (!asked) return;
+  const { inv, reached } = asked;
 
   let target = config.workspaceFolder();
   if (!(target && target.uri.scheme === 'file' && isEmptyDir(target.uri.fsPath))) {
     const picked = await vscode.window.showOpenDialog({
       canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
       openLabel: t('join.folder.openLabel'),
-      title: t('join.folder.title', { project: conn.project }),
+      title: t('join.folder.title', { project: inv.project }),
     });
     if (!picked) return;
     target = { uri: picked[0] };
@@ -68,7 +80,7 @@ async function join(app, codeArg) {
       if (!go) return;
     }
   }
-  await config.saveJoin(app.context, target.uri, conn);
+  await config.saveJoin(app.context, target.uri, inv, reached);
 
   const current = config.workspaceFolder();
   if (current && config.folderKey(current.uri) === config.folderKey(target.uri)) app.controller.connect();
@@ -79,9 +91,9 @@ async function join(app, codeArg) {
 async function pasteInvite(app) {
   const folder = config.workspaceFolder();
   if (!folder) return join(app);
-  const conn = await askInvite(app);
-  if (!conn) return;
-  await config.saveJoin(app.context, folder.uri, conn);
+  const asked = await askInvite(app);
+  if (!asked) return;
+  await config.saveJoin(app.context, folder.uri, asked.inv, asked.reached);
   app.controller.reconnect();
 }
 
@@ -92,12 +104,15 @@ async function copyInvite(app) {
     vscode.window.showWarningMessage(t('connect.unbound'));
     return;
   }
-  let host = conn.host;
-  if (['127.0.0.1', 'localhost', '::1'].includes(host)) {
-    const ips = Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => a.address);
-    host = ips[0] || host; // a code pointing at "localhost" would send the teammate to their own machine
-  }
-  const code = encodeInvite({ ...conn, host });
+  const token = await config.tokenFor(app.context, folder);
+  // A code pointing at "localhost" would send the teammate to their own machine.
+  const ips = Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => a.address);
+  const known = [...new Set([conn.lastGood, ...conn.addresses].filter(Boolean))];
+  const hosts = [...new Set(known.flatMap((h) => (['127.0.0.1', 'localhost', '::1'].includes(h) && ips.length ? ips : [h])))];
+  const { port, project, instanceId, tlsFingerprint } = conn;
+  const code = instanceId
+    ? encodeInviteV3({ instanceId, hosts, port, project, token, fingerprint: tlsFingerprint || undefined })
+    : encodeInvite({ host: hosts[0], port, project, token });
   await vscode.env.clipboard.writeText(code);
   vscode.window.showInformationMessage(t('invite.copied'));
 }

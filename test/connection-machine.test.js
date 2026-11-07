@@ -53,9 +53,9 @@ const TABLE = {
   resolving: ['=', R, 'stopped', R, '=', 'connecting', 'needs_action', '=', '=', '=', '=', '=', '='],
   connecting: ['=', R, 'stopped', R, '=', '=', '=', '=', 'handshaking', '=', '=', 'reconnecting', 'needs_action'],
   handshaking: ['=', R, 'stopped', R, '=', '=', '=', '=', '=', 'syncing', '=', 'reconnecting', 'needs_action'],
-  syncing: ['=', R, 'stopped', R, 'stopped', '=', '=', '=', '=', '=', 'live', 'reconnecting', '='],
-  live: ['=', R, 'stopped', R, '=', '=', '=', '=', '=', '=', '=', 'reconnecting', '='],
-  reconnecting: ['=', R, 'stopped', R, '=', '=', '=', 'reconnecting', 'handshaking', '=', '=', 'reconnecting', '='],
+  syncing: ['=', R, 'stopped', R, 'stopped', '=', '=', '=', '=', '=', 'live', 'reconnecting', 'needs_action'],
+  live: ['=', R, 'stopped', R, '=', '=', '=', '=', '=', '=', '=', 'reconnecting', 'needs_action'],
+  reconnecting: ['=', R, 'stopped', R, '=', '=', '=', 'reconnecting', 'handshaking', '=', '=', 'reconnecting', 'needs_action'],
   needs_action: [R, R, 'stopped', R, '=', '=', '=', '=', '=', '=', '=', '=', '='],
   stopped: [     R, R, '=', '=', '=', '=', '=', '=', '=', '=', '=', '=', '='],
 };
@@ -137,11 +137,14 @@ assert.deepStrictEqual(actions('account_denied', { account: 'github:x', entry: '
 assert.deepStrictEqual(actions('protocol_version', { proto: 2, hubMin: 3, hubMax: 3 }), ['update_extension', 'diagnose']);
 assert.deepStrictEqual(actions('protocol_version', { proto: 2, hubMin: 1, hubMax: 1 }), ['reconnect', 'diagnose']);
 assert.deepStrictEqual(actions('tls_required'), ['reconnect', 'diagnose']);
+assert.deepStrictEqual(actions('tls_mismatch'), ['paste_invite', 'diagnose'], 'a changed certificate offers no way to skip the check');
+assert.deepStrictEqual(actions('refused'), ['reconnect', 'diagnose']);
 assert.deepStrictEqual(actions('', { message: 'protocol 1 sentence' }), ['reconnect', 'diagnose']);
 assert.deepStrictEqual(M.transition(at.resolving, { type: 'RESOLVE_FAILED', session: 1, code: 'no_folder' }).actions, ['join']);
 assert.deepStrictEqual(M.transition(at.resolving, { type: 'RESOLVE_FAILED', session: 1, code: 'unbound' }).actions, ['join', 'open_settings']);
 assert.deepStrictEqual(M.transition(at.handshaking, { type: 'HUB_ERROR', session: at.handshaking.session, code: 'token_invalid' }).data, {}, 'missing data becomes {}');
-for (const code of ['no_folder', 'unbound', 'token_invalid', 'project_unknown', 'account_required', 'account_denied', 'protocol_version', 'tls_required', 'other']) {
+for (const code of ['no_folder', 'unbound', 'token_invalid', 'project_unknown', 'account_required', 'account_denied', 'protocol_version', 'tls_required',
+  'tls_mismatch', 'refused', 'timeout', 'unreachable', 'folder_readonly', 'folder_other_project', 'other']) {
   assert.ok(M.actionsFor(code, { projects: ['Demo'] }).length <= 3, `${code}: a toast carries at most three buttons`);
 }
 
