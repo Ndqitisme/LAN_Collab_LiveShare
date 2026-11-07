@@ -6,3 +6,7 @@ tools/**
 dist/**
 .lan-collab/**
 **/*.lc-tmp
+packages/**
+lanhub/**
+docs/**
+extension/webview-src/**

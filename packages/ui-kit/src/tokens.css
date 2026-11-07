@@ -1,0 +1,68 @@
+/*
+  Semantic tokens shared by every LAN Collab surface.
+  Colors come from a theme file (theme-app.css or theme-vscode.css); this file
+  holds the scales and the tokens derived from theme colors. Load order:
+  tokens.css, then one theme, then base.css (app.css and vscode.css do this).
+*/
+:root {
+  --lc-font: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --lc-font-mono: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", Menlo, monospace;
+  --lc-font-size: 13px;
+
+  --lc-text-xs: 11px;
+  --lc-text-sm: 12px;
+  --lc-text-md: 13px;
+  --lc-text-lg: 15px;
+  --lc-text-xl: 18px;
+  --lc-leading: 1.45;
+  --lc-leading-tight: 1.25;
+  --lc-weight-medium: 500;
+  --lc-weight-strong: 600;
+
+  --lc-space-0: 2px;
+  --lc-space-1: 4px;
+  --lc-space-2: 8px;
+  --lc-space-3: 12px;
+  --lc-space-4: 16px;
+  --lc-space-5: 20px;
+  --lc-space-6: 24px;
+  --lc-space-8: 32px;
+
+  --lc-radius-sm: 4px;
+  --lc-radius-md: 6px;
+  --lc-radius-lg: 8px;
+  --lc-radius-full: 999px;
+
+  --lc-control-h-sm: 24px;
+  --lc-control-h: 28px;
+  --lc-control-h-lg: 32px;
+  --lc-border-width: 1px;
+  --lc-focus-width: 2px;
+
+  --lc-dur-fast: 100ms;
+  --lc-dur: 160ms;
+  --lc-dur-slow: 240ms;
+  --lc-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --lc-z-tooltip: 40;
+  --lc-z-toast: 50;
+  --lc-z-dialog: 60;
+
+  --lc-hover: color-mix(in srgb, var(--lc-fg) 7%, transparent);
+  --lc-active: color-mix(in srgb, var(--lc-fg) 12%, transparent);
+  --lc-accent-soft: color-mix(in srgb, var(--lc-accent) 14%, transparent);
+  --lc-ok-soft: color-mix(in srgb, var(--lc-ok) 14%, transparent);
+  --lc-warn-soft: color-mix(in srgb, var(--lc-warn) 16%, transparent);
+  --lc-danger-soft: color-mix(in srgb, var(--lc-danger) 14%, transparent);
+  --lc-list-active-border: transparent;
+  --lc-shadow-sm: 0 1px 2px var(--lc-shadow);
+  --lc-shadow-lg: 0 8px 28px var(--lc-shadow), 0 1px 3px var(--lc-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --lc-dur-fast: 0ms;
+    --lc-dur: 0ms;
+    --lc-dur-slow: 0ms;
+  }
+}

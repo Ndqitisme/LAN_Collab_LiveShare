@@ -2,6 +2,8 @@
 node_modules/
 dist/
 *.vsix
+target/
+extension/webview/dist/
 
 # Secrets and per-installation data written by the hub launcher
 hub/token-*.txt
@@ -15,3 +17,6 @@ hub/allowed-accounts-*.txt
 .vscode-test/
 .DS_Store
 Thumbs.db
+
+# Screenshots and recordings made while running the plans
+docs/plans/media/

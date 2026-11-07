@@ -1,0 +1,104 @@
+/* Document defaults on top of a theme: font, colors, focus ring, selection, scrollbars. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--lc-bg);
+  color: var(--lc-fg);
+  font-family: var(--lc-font);
+  font-size: var(--lc-font-size);
+  line-height: var(--lc-leading);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: var(--lc-focus-width) solid var(--lc-focus);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--lc-selection);
+}
+
+a {
+  color: var(--lc-link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--lc-font-mono);
+}
+
+/*
+  The track is 12px wide; a 2px transparent border keeps the visible thumb at
+  8px until the pointer is on it. Setting scrollbar-width or scrollbar-color
+  would make Chromium ignore these rules, so neither is set here.
+*/
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--lc-scrollbar);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: var(--lc-radius-full);
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--lc-scrollbar-hover);
+  border-width: 0;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--lc-scrollbar-active);
+  border-width: 0;
+}
+
+.lc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
