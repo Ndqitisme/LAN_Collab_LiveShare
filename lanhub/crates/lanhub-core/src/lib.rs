@@ -1,10 +1,14 @@
 //! The LAN Hub server: one project served over NDJSON on TCP, at protocol 2 parity with `hub/hub.js`.
 
+pub mod allow;
+pub mod chat;
+pub mod discovery;
 pub mod exclude;
 pub mod files;
 pub mod flush;
 pub mod framing;
 pub mod identity;
+pub mod invite;
 pub mod paths;
 pub mod presence;
 pub mod project;
@@ -41,6 +45,8 @@ pub struct HubConfig {
     pub history: Option<PathBuf>,
     pub exclude: Vec<String>,
     pub name: Option<String>,
+    /// UDP discovery port; `None` binds no UDP socket (`--no-discovery`).
+    pub discovery_port: Option<u16>,
     /// Debug builds only: a message about this path panics inside its handler (tests of the recovery).
     pub panic_path: Option<String>,
 }
@@ -50,12 +56,16 @@ pub struct Hub {
     inbox: mpsc::Sender<ActorMsg>,
     accept: JoinHandle<()>,
     actor: JoinHandle<()>,
+    discovery: Option<JoinHandle<()>>,
 }
 
 impl Hub {
     /// Writes every pending file, then stops serving.
     pub async fn stop(self) {
         self.accept.abort();
+        if let Some(d) = &self.discovery {
+            d.abort();
+        }
         let (done, wait) = oneshot::channel();
         if self.inbox.send(ActorMsg::Shutdown { done }).await.is_ok() {
             let _ = wait.await;
@@ -147,22 +157,14 @@ pub async fn start(cfg: HubConfig) -> std::io::Result<Hub> {
     patterns.extend(cfg.exclude.iter().cloned());
     let excluder = Excluder::new(&patterns);
     let id = identity::load(&root)?;
-    let info = Arc::new(ProjectInfo {
-        name: name.clone(),
-        token: cfg.token.clone(),
-        hub_id: id.hub_id,
-        instance_id: id.instance_id,
-        hub_name: cfg
-            .name
-            .clone()
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(util::hostname),
-        hub_version: HUB_VERSION.to_owned(),
-        exclude: patterns,
-        features: Vec::new(),
-    });
+    let hub_name = cfg
+        .name
+        .clone()
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(util::hostname);
     let loaded = load_files(&root, &excluder);
     let count = loaded.len();
+    let chat = chat::load(&chat::log_path(&history));
 
     let host = if cfg.host.is_empty() {
         "0.0.0.0"
@@ -177,15 +179,65 @@ pub async fn start(cfg: HubConfig) -> std::io::Result<Hub> {
     ));
     if let Some(f) = &cfg.allow_file {
         log(format!(
-            "[CẢNH BÁO] bản này chưa áp dụng danh sách tài khoản {} (có từ A3): ai có token cũng vào được",
+            "Danh sách tài khoản được vào: {} (trống hoặc không có file = ai có token cũng vào được)",
             f.display()
         ));
     }
+    log_invites(&id.instance_id, port, &name, &cfg.token);
+
+    let projects = vec![name.clone()];
+    let discovery = match cfg.discovery_port {
+        None => None,
+        Some(udp) => match discovery::bind(udp).await {
+            Ok(sock) => {
+                log(format!("Cho máy khác tự tìm hub: UDP cổng {udp}"));
+                let reply = serde_json::to_vec(&discovery::Here {
+                    t: "lanhub_here",
+                    v: 2,
+                    instance_id: &id.instance_id,
+                    hub_name: &hub_name,
+                    port,
+                    tls: false,
+                    projects: &projects,
+                })
+                .expect("the reply serializes");
+                Some(discovery::serve(sock, reply))
+            }
+            Err(e) => {
+                log(format!(
+                    "[CẢNH BÁO] không mở được cổng UDP {udp} để máy khác tự tìm thấy hub: {e}. Hub vẫn chạy; máy khác vào bằng mã mời."
+                ));
+                None
+            }
+        },
+    };
+    let mut features = vec!["chat-image".to_owned()];
+    if discovery.is_some() {
+        features.push("discovery".to_owned());
+    }
+    let info = Arc::new(ProjectInfo {
+        name,
+        token: cfg.token.clone(),
+        hub_id: id.hub_id,
+        instance_id: id.instance_id,
+        hub_name,
+        hub_version: HUB_VERSION.to_owned(),
+        exclude: patterns,
+        features,
+        allow_file: cfg.allow_file.clone(),
+    });
 
     let (inbox, rx) = mpsc::channel(INBOX);
-    let actor = tokio::spawn(
-        Project::new(info.clone(), root, excluder, loaded, cfg.panic_path.clone()).run(rx),
+    let project = Project::new(
+        info.clone(),
+        root,
+        excluder,
+        loaded,
+        history,
+        chat,
+        cfg.panic_path.clone(),
     );
+    let actor = tokio::spawn(project.run(rx));
     let handle = ProjectHandle {
         info,
         inbox: inbox.clone(),
@@ -210,5 +262,25 @@ pub async fn start(cfg: HubConfig) -> std::io::Result<Hub> {
         inbox,
         accept,
         actor,
+        discovery,
     })
+}
+
+/// The invite lines of the Node hub: one legacy `LC-` code per address for 0.1.1 extensions, then one
+/// `LC3-` code with every address. A machine with no LAN address prints none.
+fn log_invites(instance_id: &str, port: u16, project: &str, token: &str) {
+    let ips = util::ipv4_addresses();
+    for ip in &ips {
+        log(format!(
+            "Mã mời ({ip}): {}",
+            invite::encode_v1(*ip, port, project, token)
+        ));
+    }
+    if !ips.is_empty() {
+        let hosts: Vec<String> = ips.iter().map(ToString::to_string).collect();
+        log(format!(
+            "Mã mời: {}",
+            invite::encode_v3(instance_id, &hosts, port, project, token)
+        ));
+    }
 }

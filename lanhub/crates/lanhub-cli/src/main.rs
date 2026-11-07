@@ -54,6 +54,24 @@ fn main() -> ExitCode {
             }
         },
     };
+    // `a['no-discovery'] ? null : Number(a['discovery-port'] || 8201)`
+    let no_discovery = a
+        .get("no-discovery")
+        .is_some_and(|v| v.as_deref() != Some(""));
+    let discovery_port = if no_discovery {
+        None
+    } else {
+        match value("discovery-port") {
+            None => Some(lanhub_core::discovery::DEFAULT_PORT),
+            Some(p) => match p.parse::<u16>() {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    eprintln!("Không mở được hub: cổng UDP không hợp lệ \"{p}\"");
+                    return ExitCode::from(1);
+                }
+            },
+        }
+    };
     let cfg = HubConfig {
         root: root.into(),
         port,
@@ -68,6 +86,7 @@ fn main() -> ExitCode {
             .map(|e| e.split(',').map(str::to_owned).collect())
             .unwrap_or_default(),
         name: value("name"),
+        discovery_port,
         panic_path: None,
     };
     let json_log = value("log-format").as_deref() == Some("json");

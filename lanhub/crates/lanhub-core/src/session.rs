@@ -18,7 +18,8 @@ use tokio::time::{Instant, sleep_until};
 
 use crate::framing::{LineDecoder, MAX_LINE, PREAUTH_MAX_LINE, Tail};
 use crate::project::{ActorMsg, JoinRequest, Line, ProjectInfo, line};
-use crate::util::{log, now_ms, random_uuid, sha1_hex};
+use crate::util::{log, now_ms, random_uuid};
+use crate::{allow, chat};
 
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(5);
@@ -93,9 +94,12 @@ enum Hello {
     Accept(JoinRequest),
 }
 
-/// The checks of docs/protocol.md section 3.3, in order. The allow list arrives in A3, so the account step
-/// always passes here.
-fn steps(info: &ProjectInfo, m: &Json) -> (ProbeResult, Option<HubError>) {
+/// The checks of docs/protocol.md section 3.3, in order; the allow file is read only for a token holder.
+async fn steps(
+    info: &ProjectInfo,
+    m: &Json,
+    account: Option<&Account>,
+) -> (ProbeResult, Option<HubError>) {
     let mut r = ProbeResult {
         proto_ok: m.get("proto").and_then(Json::as_f64) == Some(2.0),
         project_ok: None,
@@ -144,8 +148,10 @@ fn steps(info: &ProjectInfo, m: &Json) -> (ProbeResult, Option<HubError>) {
     if !token_ok {
         return (r, Some(HubError::TokenInvalid {}));
     }
-    r.account_ok = Some(true);
-    (r, None)
+    let refusal = allow::check(info.allow_file.as_deref(), account).await;
+    r.account_ok = Some(refusal.is_none());
+    r.account_error = refusal.clone();
+    (r, refusal)
 }
 
 /// `hello.account` as the Node hub normalizes it: only an object with a non-empty string `label` counts.
@@ -166,19 +172,29 @@ fn account(m: &Json) -> Option<Account> {
     })
 }
 
-fn hello(info: &ProjectInfo, m: &Json, key: u64, conn: &Conn, addr: &SocketAddr) -> Hello {
+async fn hello(info: &ProjectInfo, m: &Json, key: u64, conn: &Conn, addr: &SocketAddr) -> Hello {
     let proto = m.get("proto").and_then(Json::as_js_integer);
     if !proto.is_some_and(|p| p >= 2.0) {
         log(format!("Từ chối {}: protocol 1", addr.ip()));
         return Hello::Refuse(format!("{LEGACY_PROTOCOL_LINE}\n").into_bytes().into());
     }
-    let (probe, refusal) = steps(info, m);
+    let account = account(m);
+    let (probe, refusal) = steps(info, m, account.as_ref()).await;
     if m.get("probe").is_some_and(Json::truthy) {
         return Hello::Refuse(line(&HubMessage::ProbeResult(probe)));
     }
-    let account = account(m);
     if let Some(e) = refusal {
-        log(format!("Từ chối {}: {:?}", addr.ip(), e.code()));
+        let who = account
+            .as_ref()
+            .map(|a| {
+                format!(
+                    " ({}:{})",
+                    a.provider.to_utf8_lossy(),
+                    a.label.to_utf8_lossy()
+                )
+            })
+            .unwrap_or_default();
+        log(format!("Từ chối {}{who}: {:?}", addr.ip(), e.code()));
         return Hello::Refuse(line(&HubMessage::Error(e)));
     }
     let truthy = |k: &str| m.get(k).filter(|v| v.truthy());
@@ -194,7 +210,7 @@ fn hello(info: &ProjectInfo, m: &Json, key: u64, conn: &Conn, addr: &SocketAddr)
         .or_else(|| truthy("uid"))
         .map(Json::to_js_string)
         .unwrap_or_else(|| random_uuid().into());
-    let chat_key = sha1_hex(format!("chat:{}", seed.to_utf8_lossy()).as_bytes())[..16].to_owned();
+    let chat_key = chat::chat_key(&seed);
     Hello::Accept(JoinRequest {
         key,
         conn: conn.clone(),
@@ -266,7 +282,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
                 conn.close();
                 break 'conn;
             }
-            match hello(&project.info, &m, key, &conn, &addr) {
+            match hello(&project.info, &m, key, &conn, &addr).await {
                 Hello::Refuse(l) => {
                     conn.send(l);
                     break 'conn;

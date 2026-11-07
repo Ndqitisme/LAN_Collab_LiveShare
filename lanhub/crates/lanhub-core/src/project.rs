@@ -12,12 +12,14 @@ use std::time::Duration;
 use lanhub_ot::{TextOperation, diff};
 use lanhub_protocol::json::{self, JsStr, Json};
 use lanhub_protocol::{
-    Account, Activity, ActivityKind, FileBody, FileContent, FileInfo, FileKind, FileMessage,
-    HubMessage, IgnoredReason, Presence, User, Welcome, WireOp,
+    Account, Activity, ActivityKind, ChatRejectCode, ChatRejectData, FileBody, FileContent,
+    FileInfo, FileKind, FileMessage, HubMessage, IgnoredReason, MediaReply, Presence, User,
+    Welcome, WireOp,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval, sleep_until};
 
+use crate::chat::{self, CHAT_KEEP, IMAGE_MAX, WELCOME_CHAT};
 use crate::exclude::Excluder;
 use crate::files::{abs_path, uniform_eol};
 use crate::flush::{FlushSchedule, Io, IoJob, IoResult};
@@ -55,6 +57,8 @@ pub struct ProjectInfo {
     /// `welcome.exclude`: the default patterns plus the hub's own, as given.
     pub exclude: Vec<String>,
     pub features: Vec<String>,
+    /// Read on every hello (`allow.rs`).
+    pub allow_file: Option<PathBuf>,
 }
 
 /// A hello the session accepted.
@@ -166,6 +170,16 @@ enum Then {
         key: u64,
         rel: String,
     },
+    ChatImage {
+        key: u64,
+        text: JsStr,
+        image: Json,
+    },
+    Media {
+        key: u64,
+        id: String,
+        mime: Json,
+    },
 }
 
 struct Pending {
@@ -213,6 +227,9 @@ pub struct Project {
     uid_gone: HashMap<JsStr, Instant>,
     edit_notes: HashMap<(String, String), Instant>,
     activity: VecDeque<Activity>,
+    /// `<history>`: `chat.jsonl` and `chat-media/`.
+    history: PathBuf,
+    chat: VecDeque<Json>,
     color_index: usize,
     schedule: FlushSchedule,
     io: Io,
@@ -235,6 +252,8 @@ impl Project {
         root: PathBuf,
         excluder: Excluder,
         loaded: Vec<LoadedFile>,
+        history: PathBuf,
+        chat: VecDeque<Json>,
         panic_path: Option<String>,
     ) -> Project {
         let mut files = HashMap::new();
@@ -264,6 +283,8 @@ impl Project {
             uid_gone: HashMap::new(),
             edit_notes: HashMap::new(),
             activity: VecDeque::new(),
+            history,
+            chat,
             color_index: 0,
             schedule,
             slow: Vec::new(),
@@ -396,6 +417,8 @@ impl Project {
                         self.on_status(key, &msg);
                         None
                     }
+                    "chat" => self.on_chat(key, &msg),
+                    "media" => self.on_media(key, &msg),
                     "ping" => {
                         self.send(key, &HubMessage::Pong { ts: now_ms() });
                         None
@@ -574,7 +597,12 @@ impl Project {
             features: self.info.features.clone(),
             key: me.chat_key.clone(),
             exclude: self.info.exclude.clone(),
-            chat: Vec::new(),
+            chat: self
+                .chat
+                .iter()
+                .skip(self.chat.len().saturating_sub(WELCOME_CHAT))
+                .cloned()
+                .collect(),
             proto: 2,
             instance_id: self.info.instance_id.clone(),
             hub_name: self.info.hub_name.clone(),
@@ -973,6 +1001,119 @@ impl Project {
         }
     }
 
+    fn on_chat(&mut self, key: u64, msg: &Json) -> Option<Pending> {
+        let text = chat::text(msg.get("text"));
+        let Some(upload) = msg.get("image").filter(|v| v.is_js_object()) else {
+            if !text.is_empty() {
+                self.post_chat(key, text, None);
+            }
+            return None;
+        };
+        let Some(image) = chat::check_image(upload) else {
+            self.send(key, &Self::image_rejected());
+            return None;
+        };
+        let abs = chat::media_path(&self.history, &image.id, image.ext);
+        let bytes = image.bytes;
+        self.io(
+            |done| IoJob::WriteNew { abs, bytes, done },
+            Then::ChatImage {
+                key,
+                text,
+                image: image.meta,
+            },
+        )
+    }
+
+    fn image_rejected() -> HubMessage {
+        HubMessage::ChatRejected {
+            code: ChatRejectCode::ImageInvalid,
+            data: ChatRejectData {
+                max_bytes: IMAGE_MAX as u64,
+            },
+        }
+    }
+
+    /// Records an accepted message and sends it to every member, the sender included.
+    fn post_chat(&mut self, key: u64, text: JsStr, image: Option<Json>) {
+        let Some(m) = self.member(key) else {
+            return;
+        };
+        let account = match &m.account {
+            Some(a) => Json::Obj(vec![
+                ("provider".into(), Json::Str(a.provider.clone())),
+                ("label".into(), Json::Str(a.label.clone())),
+            ]),
+            None => Json::Null,
+        };
+        let mut fields = vec![
+            ("id".into(), Json::Str(random_hex::<6>().into())),
+            ("ts".into(), Json::Num(now_ms() as f64)),
+            ("from".into(), Json::Str(m.name.clone())),
+            ("fromId".into(), Json::Str(m.id.clone().into())),
+            ("fromKey".into(), Json::Str(m.chat_key.clone().into())),
+            ("color".into(), Json::Str(m.color.clone().into())),
+            ("account".into(), account),
+            ("text".into(), Json::Str(text)),
+        ];
+        if let Some(image) = image {
+            fields.push(("image".into(), image));
+        }
+        let msg = Json::Obj(fields);
+        self.io.send(IoJob::Append {
+            abs: chat::log_path(&self.history),
+            bytes: json::to_line(&msg),
+            what: "chat",
+        });
+        self.chat.push_back(msg.clone());
+        while self.chat.len() > CHAT_KEEP {
+            self.chat.pop_front();
+        }
+        self.broadcast(&HubMessage::Chat { msg }, None);
+    }
+
+    fn on_media(&mut self, key: u64, msg: &Json) -> Option<Pending> {
+        let id = msg
+            .get("id")
+            .and_then(Json::as_str)
+            .filter(|id| chat::is_media_id(id));
+        let found = match id.map(|id| chat::find_image(&self.chat, id)) {
+            Some(Err(chat::NullLine)) => {
+                self.log_failure("media", key, "a chat history line is null");
+                return None;
+            }
+            Some(Ok(found)) => found,
+            None => None,
+        };
+        let (Some(id), Some(image)) = (id, found) else {
+            let echo = msg
+                .get("id")
+                .filter(|v| v.truthy())
+                .map(Json::to_js_string)
+                .unwrap_or_else(|| "".into())
+                .truncate_units(40);
+            self.send(
+                key,
+                &HubMessage::Media(MediaReply::Missing {
+                    id: echo,
+                    missing: true,
+                }),
+            );
+            return None;
+        };
+        let mime = image.get("mime").cloned().unwrap_or(Json::Null);
+        let abs = chat::media_path(
+            &self.history,
+            id,
+            chat::image_ext(image.get("mime")).unwrap_or("undefined"),
+        );
+        let id = id.to_owned();
+        self.io(
+            |done| IoJob::Read { abs, done },
+            Then::Media { key, id, mime },
+        )
+    }
+
     fn log_failure(&self, what: &str, key: u64, e: &str) {
         let who = self
             .member(key)
@@ -1056,6 +1197,28 @@ impl Project {
                 );
                 self.broadcast(&Self::blob_msg(&rel, hash, b64), Some(key));
                 self.note_edit(key, &rel, true);
+            }
+            Then::ChatImage { key, text, image } => match outcome {
+                Ok(_) => self.post_chat(key, text, Some(image)),
+                Err(e) => {
+                    log(format!("[LỖI] không lưu được ảnh chat: {e}"));
+                    self.send(key, &Self::image_rejected());
+                }
+            },
+            Then::Media { key, id, mime } => {
+                // `b64 ? found : missing`: an empty file reads as missing in the Node hub.
+                let reply = match outcome {
+                    Ok(bytes) if !bytes.is_empty() => MediaReply::Found {
+                        id,
+                        mime,
+                        b64: base64_encode(&bytes),
+                    },
+                    _ => MediaReply::Missing {
+                        id: id.into(),
+                        missing: true,
+                    },
+                };
+                self.send(key, &HubMessage::Media(reply));
             }
             Then::Deleted { key, rel } => {
                 if let Err(e) = outcome {

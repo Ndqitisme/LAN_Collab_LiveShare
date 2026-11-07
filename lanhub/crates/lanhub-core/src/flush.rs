@@ -38,6 +38,18 @@ pub enum IoJob {
         abs: PathBuf,
         done: oneshot::Sender<IoResult<Vec<u8>>>,
     },
+    /// Write a content-addressed file unless it exists: an existing one already holds these bytes.
+    WriteNew {
+        abs: PathBuf,
+        bytes: Vec<u8>,
+        done: oneshot::Sender<IoResult<Vec<u8>>>,
+    },
+    /// Append to a file, creating it and its folder, and log a failure under `what`.
+    Append {
+        abs: PathBuf,
+        bytes: Vec<u8>,
+        what: &'static str,
+    },
     /// Answered once every job queued before it is done.
     Barrier { done: oneshot::Sender<()> },
 }
@@ -58,6 +70,18 @@ pub fn write_file_atomic(abs: &Path, data: &[u8]) -> std::io::Result<()> {
     let result = std::fs::write(abs, data);
     let _ = std::fs::remove_file(&tmp);
     result
+}
+
+fn append(abs: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    if let Some(dir) = abs.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(abs)?
+        .write_all(bytes)
 }
 
 fn remove_file_force(abs: &Path) -> std::io::Result<()> {
@@ -137,6 +161,19 @@ fn run(job: IoJob) {
         }
         IoJob::Read { abs, done } => {
             let _ = done.send(std::fs::read(&abs).map_err(|e| e.to_string()));
+        }
+        IoJob::WriteNew { abs, bytes, done } => {
+            let r = if abs.exists() {
+                Ok(())
+            } else {
+                write_file_atomic(&abs, &bytes)
+            };
+            let _ = done.send(r.map(|_| Vec::new()).map_err(|e| e.to_string()));
+        }
+        IoJob::Append { abs, bytes, what } => {
+            if let Err(e) = append(&abs, &bytes) {
+                log(format!("[LỖI] không lưu được {what}: {e}"));
+            }
         }
         IoJob::Barrier { done } => {
             let _ = done.send(());

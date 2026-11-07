@@ -340,17 +340,20 @@ pub struct ChatRejectData {
     pub max_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(untagged)]
 #[ts(export)]
 pub enum MediaReply {
+    /// `mime` is echoed from the stored message, whatever its JSON type.
     Found {
         id: String,
-        mime: String,
+        #[ts(as = "String")]
+        mime: Json,
         b64: String,
     },
     Missing {
-        id: String,
+        #[ts(as = "String")]
+        id: JsStr,
         missing: bool,
     },
 }

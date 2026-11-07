@@ -1,6 +1,8 @@
 // Load generator: starts a hub (LANHUB_CMD or the Node hub) on a temp folder, connects N raw protocol clients,
 // creates one text file and has every client insert into it at a fixed rate. Prints one JSON line.
-// Usage: node tools/loadgen.mjs [--clients 10] [--rate 20] [--seconds 30] [--seed 1]
+// --chat N also sends N chat messages per second in total, round robin over the clients, and reports the time
+// from send to receipt over every member (the sender included).
+// Usage: node tools/loadgen.mjs [--clients 10] [--rate 20] [--seconds 30] [--seed 1] [--chat 0]
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,9 +20,9 @@ const FILE = 'loadgen.txt';
 const DRAIN_MS = 5000;
 
 function parseArgs(argv) {
-  const out = { clients: 10, rate: 20, seconds: 30, seed: 1 };
+  const out = { clients: 10, rate: 20, seconds: 30, seed: 1, chat: 0 };
   for (let i = 0; i < argv.length; i++) {
-    const m = /^--(clients|rate|seconds|seed)$/.exec(argv[i]);
+    const m = /^--(clients|rate|seconds|seed|chat)$/.exec(argv[i]);
     if (!m) throw new Error(`unknown argument ${argv[i]}`);
     out[m[1]] = Number(argv[++i]);
     if (!(out[m[1]] > 0)) throw new Error(`--${m[1]} needs a positive number`);
@@ -61,6 +63,8 @@ const random = rng(args.seed);
 const sentAt = new Map(); // insert marker -> send time, shared by all clients since they live in this process
 const ackRtt = [];
 const fanout = [];
+const chatSentAt = new Map(); // chat text -> send time
+const chatLatency = [];
 const fail = (msg) => {
   console.error(`loadgen: ${msg}`);
   process.exit(1);
@@ -87,6 +91,10 @@ class Client {
   }
 
   onMessage(m) {
+    if (m.t === 'chat') {
+      if (chatSentAt.has(m.msg.text)) chatLatency.push(performance.now() - chatSentAt.get(m.msg.text));
+      return;
+    }
     if (m.path !== FILE) return;
     if (m.t === 'file') {
       this.rev = m.rev;
@@ -137,14 +145,26 @@ while (clients.some((c) => c.rev === null)) {
 const t0 = performance.now();
 // Spread the clients over one interval so the hub sees a steady stream rather than bursts.
 clients.forEach((c, i) => (c.due = t0 + (INTERVAL * i) / args.clients));
+let chatDue = t0;
+let chatSent = 0;
 const driver = setInterval(() => {
   const now = performance.now();
   for (const c of clients) c.tick(now);
+  while (args.chat && now >= chatDue) {
+    chatDue += 1000 / args.chat;
+    const text = `chat ${chatSent}`;
+    chatSentAt.set(text, performance.now());
+    clients[chatSent % clients.length].ls.send({ t: 'chat', text });
+    chatSent += 1;
+  }
 }, 2);
 await sleep(args.seconds * 1000);
 clearInterval(driver);
 const drainEnd = Date.now() + DRAIN_MS;
-while (Date.now() < drainEnd && (clients.some((c) => c.pending) || fanout.length < ackRtt.length * (args.clients - 1))) await sleep(10);
+const drained = () => !clients.some((c) => c.pending)
+  && fanout.length >= ackRtt.length * (args.clients - 1)
+  && chatLatency.length >= chatSent * args.clients;
+while (Date.now() < drainEnd && !drained()) await sleep(10);
 
 const hubRssMb = rssMb(hub.pid);
 for (const c of clients) {
@@ -156,6 +176,7 @@ fs.rmSync(root, { recursive: true, force: true });
 
 ackRtt.sort((a, b) => a - b);
 fanout.sort((a, b) => a - b);
+chatLatency.sort((a, b) => a - b);
 const sent = clients.reduce((n, c) => n + c.sent, 0);
 const acked = clients.reduce((n, c) => n + c.acked, 0);
 console.log(JSON.stringify({
@@ -170,5 +191,6 @@ console.log(JSON.stringify({
   fanoutP99: percentile(fanout, 99),
   opsPerSec: Math.round((acked / args.seconds) * 10) / 10,
   hubRssMb,
+  ...(args.chat ? { chatSent, chatReceived: chatLatency.length, chatP50: percentile(chatLatency, 50), chatP99: percentile(chatLatency, 99) } : {}),
 }));
 process.exit(sent === acked ? 0 : 1);

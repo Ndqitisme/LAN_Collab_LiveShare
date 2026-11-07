@@ -64,6 +64,20 @@ impl JsStr {
         JsStr::from_units(&self.units()[..n])
     }
 
+    /// `String.prototype.trim`.
+    pub fn trim(&self) -> JsStr {
+        match self {
+            JsStr::Utf8(s) => js_trim(s).into(),
+            JsStr::Wide(u) => {
+                // Every JavaScript whitespace character is in the BMP, so a unit test is enough.
+                let ws = |c: &u16| char::from_u32(u32::from(*c)).is_some_and(is_js_whitespace);
+                let start = u.iter().position(|c| !ws(c)).unwrap_or(u.len());
+                let end = u.iter().rposition(|c| !ws(c)).map_or(start, |i| i + 1);
+                JsStr::from_units(&u[start..end])
+            }
+        }
+    }
+
     /// The bytes `Buffer.from(s, 'utf8')` produces: a lone surrogate becomes U+FFFD.
     pub fn to_utf8_lossy(&self) -> Cow<'_, str> {
         match self {
