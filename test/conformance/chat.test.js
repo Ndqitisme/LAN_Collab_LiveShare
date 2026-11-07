@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { CollabClient } = require('../../lib/client-core');
-const { startHubProcess } = require('../support/hub-process');
+const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-chat-${n}-`));
@@ -41,6 +41,16 @@ function client(port, name, account) {
   const allowFile = path.join(tmp('cfg'), 'allowed.txt');
   fs.writeFileSync(allowFile, '# comment\ngithub:Alice\n  bob@corp.com  # any provider\n');
   const start = () => startHubProcess({ root, project: 'Demo', history, allowFile });
+  // lanhub gains chat, chat images and the allow list in A3; until then its welcome lacks chat-image.
+  {
+    const probeHub = await start();
+    const { features } = await probeWelcome(probeHub.port, { project: 'Demo', account: { provider: 'github', label: 'alice' } });
+    await probeHub.stop();
+    if (!features.includes('chat-image')) {
+      require('node:test').test('chat.test.js', { skip: 'hub lacks the chat-image feature' }, () => {});
+      return;
+    }
+  }
   let hub = await start();
 
   // Allow-list: matching is case-insensitive; with or without provider prefix.

@@ -5,12 +5,16 @@ on:
     paths:
       - "lanhub/**"
       - "lib/ot.js"
+      - "lib/common.js"
+      - "packages/protocol/**"
       - "tools/gen-ot-vectors.mjs"
       - ".github/workflows/lanhub.yml"
   pull_request:
     paths:
       - "lanhub/**"
       - "lib/ot.js"
+      - "lib/common.js"
+      - "packages/protocol/**"
       - "tools/gen-ot-vectors.mjs"
       - ".github/workflows/lanhub.yml"
 
@@ -41,3 +45,11 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: .
         run: node tools/gen-ot-vectors.mjs && git diff --exit-code lanhub/crates/lanhub-ot/tests/vectors
+      - name: Core vectors match lib/common.js
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: node lanhub/crates/lanhub-core/tests/vectors/gen.mjs && git diff --exit-code lanhub/crates/lanhub-core/tests/vectors
+      - name: TypeScript types match lanhub-protocol
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: git diff --exit-code packages/protocol/src/generated && test -z "$(git status --porcelain packages/protocol/src/generated)"

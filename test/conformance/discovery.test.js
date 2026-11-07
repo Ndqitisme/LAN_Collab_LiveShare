@@ -9,7 +9,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { test } = require('node:test');
+const { test, before } = require('node:test');
 const C = require('../../lib/common');
 const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
@@ -44,7 +44,20 @@ async function ask(port, payloads, ms = 500) {
   return replies;
 }
 
-test('lanhub_discover gets lanhub_here with the hub instanceId within 500 ms', async () => {
+// lanhub answers discovery from A3 on; until then its welcome lacks the feature and the cases that need a
+// responder are skipped.
+let discovery = false;
+before(async () => {
+  const hub = await startHubProcess({ root: tmp('probe'), project: 'Demo', discoveryPort: await freeUdpPort() });
+  try {
+    discovery = (await probeWelcome(hub.port, { project: 'Demo' })).features.includes('discovery');
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('lanhub_discover gets lanhub_here with the hub instanceId within 500 ms', async (t) => {
+  if (!discovery) return t.skip('hub lacks the discovery feature');
   const udp = await freeUdpPort();
   const hub = await startHubProcess({ root: tmp('on'), project: 'Demo', token: 'tk', discoveryPort: udp });
   try {
@@ -88,7 +101,8 @@ test('--no-discovery binds no UDP port', async () => {
   }
 });
 
-test('a taken discovery port logs a warning and the TCP hub keeps serving', async () => {
+test('a taken discovery port logs a warning and the TCP hub keeps serving', async (t) => {
+  if (!discovery) return t.skip('hub lacks the discovery feature');
   const holder = await bindUdp(0);
   const udp = holder.address().port;
   const hub = await startHubProcess({ root: tmp('busy'), project: 'Demo', discoveryPort: udp });

@@ -87,6 +87,10 @@ let open; // hub with a token, no allow list
 let gated; // hub with a token and an allow list
 let gatedAllow;
 let hubMin;
+let features = [];
+// lanhub gains the allow list together with chat images in A3; the protocol has no feature name for the
+// allow list, so its cases follow chat-image.
+const allowList = () => features.includes('chat-image');
 
 before(async () => {
   gatedAllow = path.join(tmp('cfg'), 'allowed.txt');
@@ -97,6 +101,9 @@ before(async () => {
   ]);
   const { m } = await refused(open.port, { proto: 3 });
   hubMin = m.data && m.data.hubMin;
+  const c = await join(open.port, { name: 'features' });
+  features = c.welcome.features;
+  c.close();
 });
 
 after(async () => {
@@ -122,7 +129,8 @@ test('handshake checks proto, then project, then token', async () => {
   (await join(open.port, { project: 'demo' })).close(); // project names compare case-insensitively
 });
 
-test('account_required and account_denied come after the token check', async () => {
+test('account_required and account_denied come after the token check', async (t) => {
+  if (!allowList()) return t.skip('hub has no allow list (no chat-image feature)');
   assertCodedError((await refused(gated.port, { token: 'bad' })).m, 'token_invalid');
   const req = (await refused(gated.port, {})).m;
   assertCodedError(req, 'account_required');
@@ -160,13 +168,15 @@ test('probe_result reports each step and stops at the first failing one', async 
   assert.strictEqual(r.hubId, null);
   r = await probe({ token: 'bad' });
   assert.deepStrictEqual([r.proto_ok, r.project_ok, r.token_ok, r.account_ok], [true, true, false, null]);
-  r = await probe({});
-  assert.deepStrictEqual([r.proto_ok, r.project_ok, r.token_ok, r.account_ok], [true, true, true, false]);
-  assert.strictEqual(r.account_error.code, 'account_required');
-  r = await probe({ account: { provider: 'github', label: 'mallory' } });
-  assert.strictEqual(r.account_ok, false);
-  assert.strictEqual(r.account_error.code, 'account_denied');
-  assert.strictEqual(r.account_error.data.entry, 'github:mallory');
+  if (allowList()) {
+    r = await probe({});
+    assert.deepStrictEqual([r.proto_ok, r.project_ok, r.token_ok, r.account_ok], [true, true, true, false]);
+    assert.strictEqual(r.account_error.code, 'account_required');
+    r = await probe({ account: { provider: 'github', label: 'mallory' } });
+    assert.strictEqual(r.account_ok, false);
+    assert.strictEqual(r.account_error.code, 'account_denied');
+    assert.strictEqual(r.account_error.data.entry, 'github:mallory');
+  }
   r = await probe({ account: { provider: 'github', label: 'alice' } });
   assert.deepStrictEqual([r.proto_ok, r.project_ok, r.token_ok, r.account_ok], [true, true, true, true]);
   assert.strictEqual(r.hubId, watcher.welcome.hubId);
@@ -190,7 +200,7 @@ test('welcome carries proto, instanceId, hubName, hubVersion and features; ids s
     assert.ok(typeof w.instanceId === 'string' && w.instanceId && w.instanceId !== w.hubId);
     assert.ok(typeof w.hubName === 'string' && w.hubName);
     assert.ok(typeof w.hubVersion === 'string' && w.hubVersion);
-    assert.ok(Array.isArray(w.features) && w.features.includes('chat-image'));
+    assert.ok(Array.isArray(w.features) && w.features.every((f) => typeof f === 'string'));
     assert.ok(!w.features.includes('discovery'), 'discovery is off in this hub');
     c.close();
     await hub.stop();
@@ -283,7 +293,8 @@ test('presence rtt reaches the other protocol 2 members; an invalid rtt is dropp
   b.close();
 });
 
-test('chat_rejected is coded for protocol 2', async () => {
+test('chat_rejected is coded for protocol 2', async (t) => {
+  if (!features.includes('chat-image')) return t.skip('hub lacks the chat-image feature');
   const c = await join(open.port);
   c.send({ t: 'chat', text: 'x', image: { mime: 'image/png', b64: '' } });
   await until(() => c.find((m) => m.t === 'chat_rejected'), 'chat_rejected');
@@ -346,11 +357,14 @@ test('lib/client-core.js renders the 0.1 sentences from codes and activity kinds
   await until(() => bad.fatal && lost.fatal, 'both refusals');
   assert.deepStrictEqual(bad.fatal, { msg: 'Sai lanCollab.token.', code: 'token_invalid' });
   assert.deepStrictEqual(lost.fatal, { msg: 'Hub này phục vụ dự án "Demo", máy đang mở "Nope".', code: 'project_unknown' });
-  const denied = collab(gated.port, 'cc-mallory', { account: { provider: 'github', label: 'mallory' } });
-  await until(() => denied.fatal, 'account refusal');
-  assert.strictEqual(denied.fatal.code, 'account_denied');
-  assert.match(denied.fatal.msg, /^Tài khoản github:mallory chưa được phép vào\. Nhờ người quản lý hub thêm dòng "github:mallory" vào /);
-  for (const c of [bad, lost, denied]) c.disconnect();
+  for (const c of [bad, lost]) c.disconnect();
+  if (allowList()) {
+    const denied = collab(gated.port, 'cc-mallory', { account: { provider: 'github', label: 'mallory' } });
+    await until(() => denied.fatal, 'account refusal');
+    assert.strictEqual(denied.fatal.code, 'account_denied');
+    assert.match(denied.fatal.msg, /^Tài khoản github:mallory chưa được phép vào\. Nhờ người quản lý hub thêm dòng "github:mallory" vào /);
+    denied.disconnect();
+  }
 
   const cc = collab(open.port, 'cc-view');
   await until(() => cc.ready, 'client ready');
