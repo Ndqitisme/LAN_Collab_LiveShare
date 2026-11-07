@@ -2,7 +2,12 @@
 // creates one text file and has every client insert into it at a fixed rate. Prints one JSON line.
 // --chat N also sends N chat messages per second in total, round robin over the clients, and reports the time
 // from send to receipt over every member (the sender included).
-// Usage: node tools/loadgen.mjs [--clients 10] [--rate 20] [--seconds 30] [--seed 1] [--chat 0]
+// --projects N (N > 1, lanhub with the multi-project feature) serves N projects from a lanhub.toml on one port,
+// with --clients members in each, and adds per-project ackRtt and fanout percentiles under "projects".
+// --port P --project NAME drives one project of a hub that is already running (started by the caller), so several
+// loadgen processes can load one multi-project hub without sharing one event loop; hubRssMb is then null.
+// Usage: node tools/loadgen.mjs [--clients 10] [--rate 20] [--seconds 30] [--seed 1] [--chat 0] [--projects 1]
+//        [--port P --project NAME]
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,9 +25,13 @@ const FILE = 'loadgen.txt';
 const DRAIN_MS = 5000;
 
 function parseArgs(argv) {
-  const out = { clients: 10, rate: 20, seconds: 30, seed: 1, chat: 0 };
+  const out = { clients: 10, rate: 20, seconds: 30, seed: 1, chat: 0, projects: 1, port: 0, project: 'loadgen' };
   for (let i = 0; i < argv.length; i++) {
-    const m = /^--(clients|rate|seconds|seed|chat)$/.exec(argv[i]);
+    if (argv[i] === '--project') {
+      out.project = argv[++i];
+      continue;
+    }
+    const m = /^--(clients|rate|seconds|seed|chat|projects|port)$/.exec(argv[i]);
     if (!m) throw new Error(`unknown argument ${argv[i]}`);
     out[m[1]] = Number(argv[++i]);
     if (!(out[m[1]] > 0)) throw new Error(`--${m[1]} needs a positive number`);
@@ -72,8 +81,9 @@ const fail = (msg) => {
 
 // One member that waits for the ack of its op before sending the next, so it only needs the document length.
 class Client {
-  constructor(index, port) {
+  constructor(index, port, project) {
     this.index = index;
+    this.project = project;
     this.seq = 0;
     this.rev = null;
     this.len = 0;
@@ -87,7 +97,7 @@ class Client {
     this.welcomed = new Promise((resolve) => {
       this.ls.on('message', (m) => (m.t === 'welcome' ? resolve() : this.onMessage(m)));
     });
-    this.ls.sock.on('connect', () => this.ls.send({ t: 'hello', proto: C.PROTO_V2, project: 'loadgen', name: `load${index}`, uid: `load${index}` }));
+    this.ls.sock.on('connect', () => this.ls.send({ t: 'hello', proto: C.PROTO_V2, project: project.name, name: `load${index}`, uid: `load${index}` }));
   }
 
   onMessage(m) {
@@ -104,9 +114,15 @@ class Client {
       this.len += op.targetLength - op.baseLength;
       this.rev = m.rev + 1;
       const now = performance.now();
-      for (const part of m.op) if (typeof part === 'string' && sentAt.has(part)) fanout.push(now - sentAt.get(part));
+      for (const part of m.op) {
+        if (typeof part !== 'string' || !sentAt.has(part)) continue;
+        fanout.push(now - sentAt.get(part));
+        this.project.fanout.push(now - sentAt.get(part));
+      }
     } else if (m.t === 'ack') {
-      ackRtt.push(performance.now() - sentAt.get(this.pending));
+      const rtt = performance.now() - sentAt.get(this.pending);
+      ackRtt.push(rtt);
+      this.project.ackRtt.push(rtt);
       this.len += this.pending.length;
       this.rev = m.rev;
       this.pending = null;
@@ -131,11 +147,31 @@ class Client {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lan-collab-loadgen-'));
-const hub = await startHubProcess({ root, project: 'loadgen' });
+const projects = [];
+for (let p = 0; p < args.projects; p++) projects.push({ name: args.projects > 1 ? `loadgen${p + 1}` : args.project, ackRtt: [], fanout: [], clients: [] });
+let hub;
+if (args.port) {
+  hub = { port: args.port, pid: null, stop: async () => {} };
+} else if (args.projects > 1) {
+  const blocks = projects.map((p) => {
+    fs.mkdirSync(path.join(root, p.name));
+    return `[[project]]\nname = "${p.name}"\nroot = '${path.join(root, p.name)}'\n`;
+  });
+  fs.writeFileSync(path.join(root, 'lanhub.toml'), blocks.join('\n'));
+  hub = await startHubProcess({ config: path.join(root, 'lanhub.toml') });
+} else {
+  hub = await startHubProcess({ root, project: 'loadgen' });
+}
 const clients = [];
-for (let i = 0; i < args.clients; i++) clients.push(new Client(i, hub.port));
+for (const p of projects) {
+  for (let i = 0; i < args.clients; i++) {
+    const c = new Client(clients.length, hub.port, p);
+    clients.push(c);
+    p.clients.push(c);
+  }
+}
 await Promise.all(clients.map((c) => c.welcomed));
-clients[0].ls.send({ t: 'create', path: FILE, kind: 'text', text: '' });
+for (const p of projects) p.clients[0].ls.send({ t: 'create', path: FILE, kind: 'text', text: '' });
 const ready = Date.now() + 5000;
 while (clients.some((c) => c.rev === null)) {
   if (Date.now() > ready) fail(`${FILE} did not reach every client`);
@@ -162,11 +198,11 @@ await sleep(args.seconds * 1000);
 clearInterval(driver);
 const drainEnd = Date.now() + DRAIN_MS;
 const drained = () => !clients.some((c) => c.pending)
-  && fanout.length >= ackRtt.length * (args.clients - 1)
+  && projects.every((p) => p.fanout.length >= p.ackRtt.length * (args.clients - 1))
   && chatLatency.length >= chatSent * args.clients;
 while (Date.now() < drainEnd && !drained()) await sleep(10);
 
-const hubRssMb = rssMb(hub.pid);
+const hubRssMb = hub.pid ? rssMb(hub.pid) : null;
 for (const c of clients) {
   c.closing = true;
   c.ls.close();
@@ -176,6 +212,10 @@ fs.rmSync(root, { recursive: true, force: true });
 
 ackRtt.sort((a, b) => a - b);
 fanout.sort((a, b) => a - b);
+for (const p of projects) {
+  p.ackRtt.sort((a, b) => a - b);
+  p.fanout.sort((a, b) => a - b);
+}
 chatLatency.sort((a, b) => a - b);
 const sent = clients.reduce((n, c) => n + c.sent, 0);
 const acked = clients.reduce((n, c) => n + c.acked, 0);
@@ -191,6 +231,14 @@ console.log(JSON.stringify({
   fanoutP99: percentile(fanout, 99),
   opsPerSec: Math.round((acked / args.seconds) * 10) / 10,
   hubRssMb,
+  ...(args.projects > 1 ? {
+    projects: projects.map((p) => ({
+      project: p.name,
+      ackRttP50: percentile(p.ackRtt, 50),
+      ackRttP99: percentile(p.ackRtt, 99),
+      fanoutP99: percentile(p.fanout, 99),
+    })),
+  } : {}),
   ...(args.chat ? { chatSent, chatReceived: chatLatency.length, chatP50: percentile(chatLatency, 50), chatP99: percentile(chatLatency, 99) } : {}),
 }));
 process.exit(sent === acked ? 0 : 1);

@@ -1,7 +1,7 @@
 //! The account allow list (docs/protocol.md section 3.3), as `accountRefusal` in `hub/hub.js`: one entry per
 //! line, `#` starts a comment, matching ignores case and accepts `provider:label` or the bare label. A
 //! missing, unreadable or empty list lets every token holder in. The file is read on every hello, so an
-//! edit applies to the next join without a restart.
+//! edit applies to the next join without a restart. `lanhub.toml` adds an inline list, judged together with the file.
 
 use std::path::Path;
 
@@ -55,8 +55,22 @@ pub fn judge(entries: &[String], account: Option<&Account>) -> Option<HubError> 
     })
 }
 
-/// Reads the allow file and judges `account`. No file configured, or one that cannot be read, allows.
-pub async fn check(file: Option<&Path>, account: Option<&Account>) -> Option<HubError> {
-    let bytes = tokio::fs::read(file?).await.ok()?;
-    judge(&entries(&String::from_utf8_lossy(&bytes)), account)
+/// Judges `account` against the inline entries (already through `entries`) plus those of the allow file,
+/// re-read now. A file that is not configured or cannot be read adds nothing.
+pub async fn check(
+    inline: &[String],
+    file: Option<&Path>,
+    account: Option<&Account>,
+) -> Option<HubError> {
+    let from_file = match file {
+        Some(f) => tokio::fs::read(f)
+            .await
+            .map(|b| entries(&String::from_utf8_lossy(&b)))
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    if from_file.is_empty() {
+        return judge(inline, account);
+    }
+    judge(&[inline, &from_file].concat(), account)
 }

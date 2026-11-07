@@ -99,9 +99,11 @@ pub struct Io {
 impl Io {
     pub fn start(name: &str) -> Io {
         let (tx, rx) = mpsc::channel::<IoJob>();
+        let project = name.to_owned();
         let thread = std::thread::Builder::new()
             .name(format!("lanhub-io-{name}"))
             .spawn(move || {
+                crate::logs::set_thread_project(&project);
                 for job in rx {
                     run(job);
                 }

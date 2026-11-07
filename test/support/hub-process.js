@@ -22,11 +22,13 @@ function hubCommand() {
 }
 
 // opts: root, project, token, history, allowFile, exclude (array), discoveryPort, args (extra CLI arguments).
+// opts.config (a lanhub.toml path) replaces root for a hub with the multi-project feature.
 // Discovery is off unless discoveryPort is given, so parallel test files never fight over UDP 8201.
-// Resolves to {port, root, pid, logs(), stop()}.
+// Resolves to {port, root, pid, logs(), waitLog(re, ms), stop()}.
 function startHubProcess(opts) {
   const [cmd, ...pre] = hubCommand();
-  const args = [...pre, '--root', opts.root, '--port', '0', '--log-format', 'json', '--stop-on-stdin-close'];
+  const source = opts.config ? ['--config', opts.config] : ['--root', opts.root];
+  const args = [...pre, ...source, '--port', '0', '--log-format', 'json', '--stop-on-stdin-close'];
   if (opts.project) args.push('--project', opts.project);
   if (opts.token) args.push('--token', opts.token);
   if (opts.history) args.push('--history', opts.history);
@@ -38,9 +40,11 @@ function startHubProcess(opts) {
   const child = spawn(cmd, args, { cwd: REPO, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
   const tail = [];
+  const watchers = new Set();
   const remember = (line) => {
     tail.push(line);
     if (tail.length > 40) tail.shift();
+    for (const w of watchers) w(line);
   };
   let stopping = false;
   let onListening = null;
@@ -89,6 +93,22 @@ function startHubProcess(opts) {
         root: opts.root,
         pid: child.pid,
         logs: () => [...tail],
+        // Resolves with the first log line from now on that matches re, or rejects after ms.
+        waitLog(re, ms = 5000) {
+          return new Promise((res, rej) => {
+            const w = (line) => {
+              if (!re.test(line)) return;
+              watchers.delete(w);
+              clearTimeout(timer);
+              res(line);
+            };
+            const timer = setTimeout(() => {
+              watchers.delete(w);
+              rej(new Error(`no log line matching ${re} within ${ms} ms:\n  ${tail.join('\n  ')}`));
+            }, ms);
+            watchers.add(w);
+          });
+        },
         // Closing stdin asks the hub to write every pending file and exit 0.
         async stop() {
           stopping = true;

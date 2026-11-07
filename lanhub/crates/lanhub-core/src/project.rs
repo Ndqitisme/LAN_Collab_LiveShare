@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lanhub_ot::{TextOperation, diff};
@@ -16,10 +17,12 @@ use lanhub_protocol::{
     FileInfo, FileKind, FileMessage, HubMessage, IgnoredReason, MediaReply, Presence, User,
     Welcome, WireOp,
 };
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval, sleep_until};
 
 use crate::chat::{self, CHAT_KEEP, IMAGE_MAX, WELCOME_CHAT};
+use crate::config::{DebugHooks, HistorySettings};
 use crate::exclude::Excluder;
 use crate::files::{abs_path, uniform_eol};
 use crate::flush::{FlushSchedule, Io, IoJob, IoResult};
@@ -45,7 +48,8 @@ pub fn line(msg: &HubMessage) -> Line {
     json::to_line(msg).into()
 }
 
-/// Facts about the project that sessions need for the handshake, fixed while it runs.
+/// The project's settings as sessions and the actor see them. A config change that needs no restart
+/// replaces the whole value, in the router's table and through `ActorMsg::Reconfigure`.
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
     pub name: String,
@@ -54,11 +58,29 @@ pub struct ProjectInfo {
     pub instance_id: String,
     pub hub_name: String,
     pub hub_version: String,
-    /// `welcome.exclude`: the default patterns plus the hub's own, as given.
+    /// `welcome.exclude`: the default patterns plus the project's own, as given.
     pub exclude: Vec<String>,
     pub features: Vec<String>,
+    /// Inline allow entries, normalized as `allow::entries` does.
+    pub allow: Vec<String>,
     /// Read on every hello (`allow.rs`).
     pub allow_file: Option<PathBuf>,
+    pub advertise: bool,
+    pub history: HistorySettings,
+}
+
+/// A connected member, as `AdminApi::clients` reports it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientInfo {
+    pub id: String,
+    pub name: String,
+    /// `provider:label`.
+    pub account: Option<String>,
+    pub addr: String,
+    pub joined_at: u64,
+    /// Milliseconds, as the client last reported it in `presence.p.rtt`.
+    pub rtt: Option<f64>,
 }
 
 /// A hello the session accepted.
@@ -81,9 +103,16 @@ pub enum ActorMsg {
     Leave {
         key: u64,
     },
-    /// Writes every pending file and stops the actor.
+    /// Writes every pending file, closes every member and stops the actor.
     Shutdown {
         done: oneshot::Sender<()>,
+    },
+    Reconfigure {
+        info: Arc<ProjectInfo>,
+        excluder: Excluder,
+    },
+    Clients {
+        reply: oneshot::Sender<Vec<ClientInfo>>,
     },
 }
 
@@ -98,9 +127,25 @@ struct Member {
     presence: Option<Presence>,
     status: JsStr,
     conn: Conn,
+    addr: String,
+    joined_at: u64,
 }
 
 impl Member {
+    fn client_info(&self) -> ClientInfo {
+        ClientInfo {
+            id: self.id.clone(),
+            name: self.name.to_utf8_lossy().into_owned(),
+            account: self
+                .account
+                .as_ref()
+                .map(|a| format!("{}:{}", a.provider.to_utf8_lossy(), a.label.to_utf8_lossy())),
+            addr: self.addr.clone(),
+            joined_at: self.joined_at,
+            rtt: self.presence.as_ref().and_then(|p| p.rtt).map(|n| n.0),
+        }
+    }
+
     fn public(&self) -> User {
         User {
             id: self.id.clone(),
@@ -235,7 +280,9 @@ pub struct Project {
     io: Io,
     /// Members whose queue was full during the last handler, closed once it returns.
     slow: Vec<u64>,
-    panic_path: Option<String>,
+    debug: DebugHooks,
+    /// Read by `AdminApi` without a round trip to the actor.
+    member_count: Arc<AtomicUsize>,
 }
 
 pub struct LoadedFile {
@@ -254,7 +301,7 @@ impl Project {
         loaded: Vec<LoadedFile>,
         history: PathBuf,
         chat: VecDeque<Json>,
-        panic_path: Option<String>,
+        debug: DebugHooks,
     ) -> Project {
         let mut files = HashMap::new();
         let mut schedule = FlushSchedule::default();
@@ -288,12 +335,18 @@ impl Project {
             color_index: 0,
             schedule,
             slow: Vec::new(),
-            panic_path: if cfg!(debug_assertions) {
-                panic_path
+            debug: if cfg!(debug_assertions) {
+                debug
             } else {
-                None
+                DebugHooks::default()
             },
+            member_count: Arc::default(),
         }
+    }
+
+    /// The number of members, kept current by the actor.
+    pub fn member_count(&self) -> Arc<AtomicUsize> {
+        self.member_count.clone()
     }
 
     pub async fn run(mut self, mut inbox: mpsc::Receiver<ActorMsg>) {
@@ -307,7 +360,17 @@ impl Project {
                         let _ = done.send(());
                         return;
                     }
-                    Some(msg) => self.dispatch(msg).await,
+                    Some(ActorMsg::Reconfigure { info, excluder }) => {
+                        self.info = info;
+                        self.excluder = excluder;
+                    }
+                    Some(ActorMsg::Clients { reply }) => {
+                        let _ = reply.send(self.members.iter().map(Member::client_info).collect());
+                    }
+                    Some(msg) => {
+                        self.crash_hook(&msg);
+                        self.dispatch(msg).await;
+                    }
                     None => {
                         self.stop().await;
                         return;
@@ -323,7 +386,21 @@ impl Project {
         }
     }
 
+    /// Debug builds: a panic outside the handlers' `catch_unwind`, so it ends the actor.
+    fn crash_hook(&self, msg: &ActorMsg) {
+        if let (Some(p), ActorMsg::Client { msg, .. }) = (&self.debug.crash_path, msg)
+            && msg.get("path").and_then(Json::as_str) == Some(p.as_str())
+        {
+            panic!("test hook: actor crash on {p}");
+        }
+    }
+
     async fn stop(&mut self) {
+        for m in &self.members {
+            m.conn.close();
+        }
+        self.members.clear();
+        self.member_count.store(0, Ordering::Relaxed);
         for rel in self.schedule.take_all() {
             self.flush(&rel);
         }
@@ -340,7 +417,9 @@ impl Project {
             ),
             ActorMsg::Join(j) => ("hello".to_owned(), j.key, None),
             ActorMsg::Leave { key } => ("leave".to_owned(), *key, None),
-            ActorMsg::Shutdown { .. } => unreachable!("handled by run"),
+            ActorMsg::Shutdown { .. } | ActorMsg::Reconfigure { .. } | ActorMsg::Clients { .. } => {
+                unreachable!("handled by run")
+            }
         };
         let result = catch_unwind(AssertUnwindSafe(|| self.handle(msg)));
         let pending = match result {
@@ -390,9 +469,10 @@ impl Project {
             }
             ActorMsg::Client { key, msg } => {
                 self.member(key)?;
-                if let (Some(p), Some(path)) =
-                    (&self.panic_path, msg.get("path").and_then(Json::as_str))
-                    && p == path
+                if let (Some(p), Some(path)) = (
+                    &self.debug.panic_path,
+                    msg.get("path").and_then(Json::as_str),
+                ) && p == path
                 {
                     panic!("test hook: panic on {path}");
                 }
@@ -426,7 +506,9 @@ impl Project {
                     _ => None,
                 }
             }
-            ActorMsg::Shutdown { .. } => None,
+            ActorMsg::Shutdown { .. } | ActorMsg::Reconfigure { .. } | ActorMsg::Clients { .. } => {
+                None
+            }
         }
     }
 
@@ -552,12 +634,16 @@ impl Project {
             presence: None,
             status: JsStr::from(""),
             conn: req.conn,
+            addr: req.addr.clone(),
+            joined_at: now_ms(),
         };
         let welcome = self.welcome(&member);
         let key = member.key;
         let user = member.public();
         let (who, color) = (member.name.clone(), member.color.clone());
         self.members.push(member);
+        self.member_count
+            .store(self.members.len(), Ordering::Relaxed);
         self.send(key, &HubMessage::Welcome(welcome));
         self.broadcast(&HubMessage::Joined { user }, Some(key));
         self.add_activity(who, color, ActivityKind::Join, None, None, Some(req.addr));
@@ -615,6 +701,8 @@ impl Project {
             return;
         };
         let m = self.members.remove(at);
+        self.member_count
+            .store(self.members.len(), Ordering::Relaxed);
         if !self.members.iter().any(|o| o.uid == m.uid) {
             self.uid_gone.insert(m.uid.clone(), Instant::now());
         }

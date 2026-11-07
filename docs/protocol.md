@@ -275,6 +275,7 @@ Because of the 5-second repeat, a client must not treat a presence whose `file`,
 | `history` | The history messages of section 12 work. | no | from A5 |
 | `tls` | This connection is TLS (section 13.1). | no | from A6, on a TLS connection |
 | `http-diag` | The TCP port answers `GET ` with a diagnosis page (section 13.2). | no | from A6 |
+| `multi-project` | The hub serves several projects on this port, chosen by `hello.project`, each with its own token, allow list and `hubId`, and adds, changes or removes projects (from `lanhub.toml`) without restarting the others. `project_unknown` and `probe_result.projects` list only advertised projects. | no | from A4 |
 
 ## 10. LAN discovery
 
@@ -413,5 +414,6 @@ Not part of the wire protocol. Both hubs implement it so `test/conformance/` and
 | `--discovery-port <n>` | UDP discovery port, default 8201. |
 | `--no-discovery` | No UDP socket at all. `test/support/hub-process.js` passes it unless a test sets `discoveryPort`, so parallel test files never compete for UDP 8201. |
 | `--tls` | Reserved for A6: TLS with a self-signed certificate. The `tls_required` conformance case runs only when `LANHUB_TLS=1`. |
+| `--config <file>` | lanhub only (feature `multi-project`), instead of `--root`: serve the projects of a `lanhub.toml` and apply the file again whenever it changes. `--port`, `--host`, `--name`, `--discovery-port` and `--no-discovery` override its `[hub]` values. A file that does not parse at start exits with code 1; later, it is logged and the running projects stay. |
 
 A flag given without a value (followed by another `--flag` or nothing) is `true`.

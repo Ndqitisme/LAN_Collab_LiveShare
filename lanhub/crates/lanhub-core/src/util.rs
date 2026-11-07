@@ -1,6 +1,5 @@
 //! Small pieces the Node hub gets from its runtime: random ids, SHA-1, clocks, Buffer's base64, host name.
 
-use std::io::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha1::{Digest, Sha1};
@@ -82,14 +81,14 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// Local wall-clock time as `HH:MM:SS`, the Node hub's log prefix.
 #[cfg(windows)]
-fn local_time() -> String {
+pub fn local_time() -> String {
     let mut t: windows_sys::Win32::Foundation::SYSTEMTIME = unsafe { std::mem::zeroed() };
     unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut t) };
     format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
 }
 
 #[cfg(unix)]
-fn local_time() -> String {
+pub fn local_time() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -101,9 +100,7 @@ fn local_time() -> String {
 
 /// One human log line on stdout. These never start with `{"event"` (docs/protocol.md section 16).
 pub fn log(msg: impl AsRef<str>) {
-    let mut out = std::io::stdout().lock();
-    let _ = writeln!(out, "{} {}", local_time(), msg.as_ref());
-    let _ = out.flush();
+    crate::logs::log_in(None, msg.as_ref());
 }
 
 /// `os.hostname()`.

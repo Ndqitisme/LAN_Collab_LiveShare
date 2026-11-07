@@ -57,3 +57,26 @@ pub fn load(root: &Path) -> std::io::Result<Identity> {
         instance_id: instance.to_js_string().to_utf8_lossy().into_owned(),
     })
 }
+
+/// The hub's `instanceId` in multi-project mode: `<config folder>/instance.json`, created on first start.
+pub fn load_instance(dir: &Path) -> std::io::Result<String> {
+    let file = dir.join("instance.json");
+    let saved = std::fs::read(&file).ok().and_then(|b| json::parse(&b).ok());
+    if let Some(id) = saved
+        .as_ref()
+        .and_then(|s| s.get("instanceId"))
+        .and_then(Json::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        return Ok(id.to_owned());
+    }
+    let id = random_uuid();
+    let text = serde_json::to_string_pretty(&serde_json::json!({
+        "instanceId": id,
+        "created": iso_now(),
+    }))
+    .expect("JSON always serializes");
+    std::fs::create_dir_all(dir)?;
+    crate::flush::write_file_atomic(&file, text.as_bytes())?;
+    Ok(id)
+}

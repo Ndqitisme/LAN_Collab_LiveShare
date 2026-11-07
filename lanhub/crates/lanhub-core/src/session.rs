@@ -17,7 +17,9 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, sleep_until};
 
 use crate::framing::{LineDecoder, MAX_LINE, PREAUTH_MAX_LINE, Tail};
+use crate::logs::log_in;
 use crate::project::{ActorMsg, JoinRequest, Line, ProjectInfo, line};
+use crate::router::{Router, Table};
 use crate::util::{log, now_ms, random_uuid};
 use crate::{allow, chat};
 
@@ -91,24 +93,25 @@ impl Conn {
 enum Hello {
     /// Answer with this line, then close.
     Refuse(Line),
-    Accept(JoinRequest),
+    Accept(Box<JoinRequest>, ProjectHandle),
 }
 
 /// The checks of docs/protocol.md section 3.3, in order; the allow file is read only for a token holder.
+/// The project is the one the hello names, from the router's current table.
 async fn steps(
-    info: &ProjectInfo,
+    table: &Table,
     m: &Json,
     account: Option<&Account>,
-) -> (ProbeResult, Option<HubError>) {
+) -> (ProbeResult, Option<HubError>, Option<ProjectHandle>) {
     let mut r = ProbeResult {
         proto_ok: m.get("proto").and_then(Json::as_f64) == Some(2.0),
         project_ok: None,
         token_ok: None,
         account_ok: None,
-        projects: vec![info.name.clone()],
+        projects: table.advertised.clone(),
         hub_id: None,
-        hub_name: info.hub_name.clone(),
-        instance_id: info.instance_id.clone(),
+        hub_name: table.hub_name.clone(),
+        instance_id: table.instance_id.clone(),
         hub_min: PROTO_MIN,
         hub_max: PROTO_MAX,
         account_error: None,
@@ -120,38 +123,39 @@ async fn steps(
                 hub_min: PROTO_MIN,
                 hub_max: PROTO_MAX,
             }),
+            None,
         );
     }
     let project = m
         .get("project")
         .filter(|v| v.truthy())
         .map(Json::to_js_string);
-    let project_ok = project
+    let found = project
         .as_ref()
         .and_then(JsStr::as_str)
-        .unwrap_or("")
-        .to_lowercase()
-        == info.name.to_lowercase();
-    r.project_ok = Some(project_ok);
-    if !project_ok {
+        .and_then(|p| table.resolve(p));
+    r.project_ok = Some(found.is_some());
+    let Some(handle) = found else {
         return (
             r,
             Some(HubError::ProjectUnknown {
-                projects: vec![info.name.clone()],
+                projects: table.advertised.clone(),
             }),
+            None,
         );
-    }
+    };
+    let info = &handle.info;
     r.hub_id = Some(info.hub_id.clone());
     let token_ok =
         info.token.is_empty() || m.get("token").and_then(Json::as_str) == Some(info.token.as_str());
     r.token_ok = Some(token_ok);
     if !token_ok {
-        return (r, Some(HubError::TokenInvalid {}));
+        return (r, Some(HubError::TokenInvalid {}), Some(handle.clone()));
     }
-    let refusal = allow::check(info.allow_file.as_deref(), account).await;
+    let refusal = allow::check(&info.allow, info.allow_file.as_deref(), account).await;
     r.account_ok = Some(refusal.is_none());
     r.account_error = refusal.clone();
-    (r, refusal)
+    (r, refusal, Some(handle.clone()))
 }
 
 /// `hello.account` as the Node hub normalizes it: only an object with a non-empty string `label` counts.
@@ -172,31 +176,24 @@ fn account(m: &Json) -> Option<Account> {
     })
 }
 
-async fn hello(info: &ProjectInfo, m: &Json, key: u64, conn: &Conn, addr: &SocketAddr) -> Hello {
+async fn hello(router: &Router, m: &Json, key: u64, conn: &Conn, addr: &SocketAddr) -> Hello {
     let proto = m.get("proto").and_then(Json::as_js_integer);
     if !proto.is_some_and(|p| p >= 2.0) {
         log(format!("Từ chối {}: protocol 1", addr.ip()));
         return Hello::Refuse(format!("{LEGACY_PROTOCOL_LINE}\n").into_bytes().into());
     }
     let account = account(m);
-    let (probe, refusal) = steps(info, m, account.as_ref()).await;
+    let (probe, refusal, project) = steps(&router.table(), m, account.as_ref()).await;
     if m.get("probe").is_some_and(Json::truthy) {
         return Hello::Refuse(line(&HubMessage::ProbeResult(probe)));
     }
-    if let Some(e) = refusal {
-        let who = account
-            .as_ref()
-            .map(|a| {
-                format!(
-                    " ({}:{})",
-                    a.provider.to_utf8_lossy(),
-                    a.label.to_utf8_lossy()
-                )
-            })
-            .unwrap_or_default();
-        log(format!("Từ chối {}{who}: {:?}", addr.ip(), e.code()));
-        return Hello::Refuse(line(&HubMessage::Error(e)));
-    }
+    let project = match (refusal, project) {
+        (None, Some(p)) => p,
+        (refusal, project) => {
+            let e = refusal.expect("a hello without a project is refused");
+            return refuse(e, account.as_ref(), project.as_ref(), addr);
+        }
+    };
     let truthy = |k: &str| m.get(k).filter(|v| v.truthy());
     let name = truthy("name")
         .map(Json::to_js_string)
@@ -211,15 +208,40 @@ async fn hello(info: &ProjectInfo, m: &Json, key: u64, conn: &Conn, addr: &Socke
         .map(Json::to_js_string)
         .unwrap_or_else(|| random_uuid().into());
     let chat_key = chat::chat_key(&seed);
-    Hello::Accept(JoinRequest {
-        key,
-        conn: conn.clone(),
-        uid,
-        name,
-        account,
-        chat_key,
-        addr: addr.ip().to_string(),
-    })
+    Hello::Accept(
+        Box::new(JoinRequest {
+            key,
+            conn: conn.clone(),
+            uid,
+            name,
+            account,
+            chat_key,
+            addr: addr.ip().to_string(),
+        }),
+        project,
+    )
+}
+
+fn refuse(
+    e: HubError,
+    account: Option<&Account>,
+    project: Option<&ProjectHandle>,
+    addr: &SocketAddr,
+) -> Hello {
+    let who = account
+        .map(|a| {
+            format!(
+                " ({}:{})",
+                a.provider.to_utf8_lossy(),
+                a.label.to_utf8_lossy()
+            )
+        })
+        .unwrap_or_default();
+    log_in(
+        project.map(|p| p.info.name.as_str()),
+        &format!("Từ chối {}{who}: {:?}", addr.ip(), e.code()),
+    );
+    Hello::Refuse(line(&HubMessage::Error(e)))
 }
 
 async fn closed(rx: &mut watch::Receiver<bool>) {
@@ -230,7 +252,7 @@ fn is_message(m: &Json) -> bool {
     m.is_object() && m.get("t").and_then(Json::as_js_str).is_some()
 }
 
-pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, key: u64) {
+pub async fn serve(stream: TcpStream, addr: SocketAddr, router: Arc<Router>, key: u64) {
     let _ = stream.set_nodelay(true);
     let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(10));
     let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive);
@@ -245,7 +267,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
     tokio::spawn(write_loop(wr, rx, conn.backlog.clone(), conn.close.clone()));
 
     let mut dec = LineDecoder::new(PREAUTH_MAX_LINE);
-    let mut joined = false;
+    let mut joined: Option<ProjectHandle> = None;
     let deadline = Instant::now() + HELLO_TIMEOUT;
     let mut last_keepalive: Option<Instant> = None;
     let mut buf = vec![0u8; READ_CHUNK];
@@ -253,7 +275,12 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
         let n = tokio::select! {
             biased;
             _ = closed(&mut close_rx) => break,
-            _ = sleep_until(deadline), if !joined => {
+            _ = sleep_until(deadline), if joined.is_none() => {
+                conn.close();
+                break;
+            }
+            // The actor ended (a panic, or a stop that raced this join): nothing will ever answer.
+            _ = async { joined.as_ref().expect("guarded").inbox.closed().await }, if joined.is_some() => {
                 conn.close();
                 break;
             }
@@ -264,7 +291,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
         };
         for raw in dec.push(&buf[..n]) {
             let parsed = json::parse(&raw);
-            if joined {
+            if let Some(project) = &joined {
                 if let Some(m) = parsed.ok().filter(is_message)
                     && project
                         .inbox
@@ -282,16 +309,16 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
                 conn.close();
                 break 'conn;
             }
-            match hello(&project.info, &m, key, &conn, &addr).await {
+            match hello(&router, &m, key, &conn, &addr).await {
                 Hello::Refuse(l) => {
                     conn.send(l);
                     break 'conn;
                 }
-                Hello::Accept(req) => {
-                    if project.inbox.send(ActorMsg::Join(req)).await.is_err() {
+                Hello::Accept(req, project) => {
+                    if project.inbox.send(ActorMsg::Join(*req)).await.is_err() {
                         break 'conn;
                     }
-                    joined = true;
+                    joined = Some(project);
                     dec.limit = MAX_LINE;
                 }
             }
@@ -308,7 +335,8 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
             }
             // A big upload keeps the member's own messages (and our pongs) waiting: show it the link is alive.
             Tail::Partial
-                if joined && last_keepalive.is_none_or(|t| t.elapsed() > KEEPALIVE_EVERY) =>
+                if joined.is_some()
+                    && last_keepalive.is_none_or(|t| t.elapsed() > KEEPALIVE_EVERY) =>
             {
                 last_keepalive = Some(Instant::now());
                 conn.send(line(&HubMessage::Pong { ts: now_ms() }));
@@ -316,7 +344,7 @@ pub async fn serve(stream: TcpStream, addr: SocketAddr, project: ProjectHandle, 
             _ => {}
         }
     }
-    if joined {
+    if let Some(project) = joined {
         let _ = project.inbox.send(ActorMsg::Leave { key }).await;
     }
 }

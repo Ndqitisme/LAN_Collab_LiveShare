@@ -49,7 +49,7 @@ async fn panic_in_a_handler_keeps_the_actor_alive() {
     .await
     .unwrap();
 
-    let (rd, mut wr) = TcpStream::connect(("127.0.0.1", hub.port))
+    let (rd, mut wr) = TcpStream::connect(("127.0.0.1", hub.port()))
         .await
         .unwrap()
         .into_split();

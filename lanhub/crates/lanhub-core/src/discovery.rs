@@ -4,10 +4,12 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use lanhub_protocol::json::{self, Json};
 use serde::Serialize;
 use tokio::net::UdpSocket;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::util::now_ms;
@@ -27,6 +29,8 @@ pub struct Here<'a> {
     pub hub_name: &'a str,
     pub port: u16,
     pub tls: bool,
+    /// Advertised projects only; lanhub leaves the field out when there is none.
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
     pub projects: &'a [String],
 }
 
@@ -61,8 +65,8 @@ pub async fn bind(port: u16) -> std::io::Result<UdpSocket> {
     UdpSocket::bind(("0.0.0.0", port)).await
 }
 
-/// Answers every request on `sock` with `reply` until the task is aborted.
-pub fn serve(sock: UdpSocket, reply: Vec<u8>) -> JoinHandle<()> {
+/// Answers every request on `sock` with the current `reply` until the task is aborted.
+pub fn serve(sock: UdpSocket, reply: watch::Receiver<Arc<[u8]>>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Large enough for any datagram, so an oversized one is measured and dropped rather than truncated.
         let mut buf = vec![0u8; 65_536];
@@ -79,7 +83,8 @@ pub fn serve(sock: UdpSocket, reply: Vec<u8>) -> JoinHandle<()> {
                 }
             };
             if is_request(&buf[..n]) && limit.allow(from.ip(), now_ms()) {
-                let _ = sock.send_to(&reply, from).await;
+                let r = reply.borrow().clone();
+                let _ = sock.send_to(&r, from).await;
             }
         }
     })

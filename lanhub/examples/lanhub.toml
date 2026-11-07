@@ -1,0 +1,33 @@
+# LAN Hub configuration. lanhub-cli reads %APPDATA%\LanHub\lanhub.toml on Windows and
+# $XDG_CONFIG_HOME/lanhub/lanhub.toml elsewhere, or the file given with --config. The hub re-reads the
+# file when it changes: a project that is added, changed, disabled or removed applies at once, and the
+# other projects keep running. A file with an error is logged and the running config stays.
+# Relative paths are taken from the folder of this file.
+
+[hub]
+name = "LAN Hub phòng phát triển"   # shown to clients; the computer name when left out
+bind = "0.0.0.0"
+port = 8200                         # one TCP port for every project
+discovery = true                    # answer LAN discovery on UDP discovery_port
+discovery_port = 8201
+
+[[project]]
+name = "MyProject"                  # clients join with this name; names ignore case
+root = 'D:\workspaces\MyProject'    # files, plus .lan-collab\ (hub.json, chat, history)
+enabled = true
+token = "5f0c9e"                    # "" lets anyone on the network join
+allow = ["github:alice", "microsoft:bob@example.com"]   # empty: every token holder
+# allow_file = 'allowed-accounts-MyProject.txt'          # a 0.1 allow list, added to `allow`
+exclude = ["build/**"]              # on top of the built-in patterns
+advertise = true                    # list the name in discovery replies and project_unknown
+
+[project.history]
+idle_minutes = 15
+keep_days = 30
+max_mb = 2048
+
+[[project]]
+name = "Docs"
+root = 'D:\workspaces\Docs'
+token = "a17d3b"
+advertise = false
