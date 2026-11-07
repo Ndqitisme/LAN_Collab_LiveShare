@@ -61,3 +61,25 @@ fn framing_limit_counts_utf16_units_and_can_be_raised_mid_chunk() {
     d.limit = MAX_LINE;
     assert_eq!(d.tail(), Tail::Partial);
 }
+
+#[test]
+fn framing_counts_invalid_utf8_like_nodes_decoder() {
+    // Each stray byte decodes to one U+FFFD in Node, so it counts toward the limit.
+    let mut d = LineDecoder::new(PREAUTH_MAX_LINE);
+    d.push(&vec![0x80; 70_000]);
+    assert_eq!(d.tail(), Tail::Overflow);
+    // Values from Buffer.from(bytes).toString('utf8').length.
+    assert_eq!(utf16_units(&[0x80; 10]), 10);
+    assert_eq!(utf16_units(&[0xf0]), 1);
+    assert_eq!(utf16_units(&[0xf0, 0x9f, 0x99]), 1);
+    assert_eq!(utf16_units(&[0xf0, 0x9f, 0x99, 0x82]), 2);
+    assert_eq!(utf16_units(&[0xe0, 0x80, 0x41]), 3);
+    assert_eq!(utf16_units(&[0xed, 0xa0, 0x80]), 3);
+    assert_eq!(utf16_units(&[0xc0, 0xaf, 0xff, 0x61]), 4);
+    // A character split across two chunks counts once, when it completes.
+    let mut d = LineDecoder::new(1);
+    d.push(&[0xf0, 0x9f]);
+    assert_eq!(d.tail(), Tail::Partial);
+    d.push(&[0x99, 0x82]);
+    assert_eq!(d.tail(), Tail::Overflow);
+}

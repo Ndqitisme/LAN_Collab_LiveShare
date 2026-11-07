@@ -17,22 +17,67 @@ pub enum Tail {
     Overflow,
 }
 
-/// UTF-16 units of UTF-8 bytes: one per code point, two for one outside the BMP.
+/// Counts the UTF-16 units Node's streaming UTF-8 decoder (`sock.setEncoding('utf8')`) produces: two for a
+/// code point outside the BMP, one for any other, and one U+FFFD for each invalid byte or cut-off sequence
+/// (the WHATWG decoder). A sequence split across chunks counts once it completes.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Utf16Counter {
+    need: u8,
+    seen: u8,
+    lower: u8,
+    upper: u8,
+}
+
+impl Utf16Counter {
+    pub fn feed(&mut self, b: u8) -> usize {
+        if self.need == 0 {
+            let (need, lower, upper) = match b {
+                0x00..=0x7f => return 1,
+                0xc2..=0xdf => (1, 0x80, 0xbf),
+                0xe0 => (2, 0xa0, 0xbf),
+                0xed => (2, 0x80, 0x9f),
+                0xe1..=0xef => (2, 0x80, 0xbf),
+                0xf0 => (3, 0x90, 0xbf),
+                0xf4 => (3, 0x80, 0x8f),
+                0xf1..=0xf3 => (3, 0x80, 0xbf),
+                _ => return 1,
+            };
+            *self = Utf16Counter {
+                need,
+                seen: 0,
+                lower,
+                upper,
+            };
+            return 0;
+        }
+        if b < self.lower || b > self.upper {
+            *self = Utf16Counter::default();
+            return 1 + self.feed(b);
+        }
+        self.seen += 1;
+        self.lower = 0x80;
+        self.upper = 0xbf;
+        if self.seen < self.need {
+            return 0;
+        }
+        let units = if self.need == 3 { 2 } else { 1 };
+        *self = Utf16Counter::default();
+        units
+    }
+}
+
+/// UTF-16 units of a complete UTF-8 byte string.
 pub fn utf16_units(bytes: &[u8]) -> usize {
-    bytes
-        .iter()
-        .map(|b| match b {
-            0x80..=0xbf => 0,
-            0xf0..=0xf7 => 2,
-            _ => 1,
-        })
-        .sum()
+    let mut c = Utf16Counter::default();
+    let n: usize = bytes.iter().map(|b| c.feed(*b)).sum();
+    n + usize::from(c.need > 0)
 }
 
 #[derive(Debug)]
 pub struct LineDecoder {
     partial: Vec<u8>,
     pending_units: usize,
+    counter: Utf16Counter,
     /// May be raised between `push` and `tail`, as the Node hub raises it while handling the hello.
     pub limit: usize,
 }
@@ -42,6 +87,7 @@ impl LineDecoder {
         LineDecoder {
             partial: Vec::new(),
             pending_units: 0,
+            counter: Utf16Counter::default(),
             limit,
         }
     }
@@ -60,6 +106,7 @@ impl LineDecoder {
                 l
             };
             self.pending_units = 0;
+            self.counter = Utf16Counter::default();
             start = end + 1;
             if !line.is_empty() {
                 lines.push(line);
@@ -67,7 +114,9 @@ impl LineDecoder {
         }
         if start < chunk.len() {
             self.partial.extend_from_slice(&chunk[start..]);
-            self.pending_units += utf16_units(&chunk[start..]);
+            for b in &chunk[start..] {
+                self.pending_units += self.counter.feed(*b);
+            }
         }
         lines
     }

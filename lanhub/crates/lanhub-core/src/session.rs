@@ -2,8 +2,8 @@
 //! member messages to the project actor, and a writer task that drains a bounded queue to the socket.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lanhub_protocol::json::{self, JsStr, Json};
@@ -38,10 +38,19 @@ pub struct ProjectHandle {
     pub inbox: mpsc::Sender<ActorMsg>,
 }
 
+/// Milliseconds on a monotonic clock, so a change of the wall clock never looks like a stall.
+fn mono_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
 #[derive(Default)]
 struct Backlog {
     bytes: AtomicUsize,
-    /// When the writer last made progress, or when the queue last became non-empty (ms since epoch).
+    /// When the writer last made progress, or when the queue last became non-empty (`mono_ms`).
     since: AtomicU64,
 }
 
@@ -56,15 +65,18 @@ pub struct Conn {
 impl Conn {
     /// Queues a line. `false` means the member is too slow to keep; the line is dropped.
     pub fn send(&self, l: Line) -> bool {
-        let now = now_ms();
+        let now = mono_ms();
         let queued = self.backlog.bytes.load(Ordering::Acquire);
-        let stalled = now.saturating_sub(self.backlog.since.load(Ordering::Acquire)) > STALL_MS;
-        if queued > 0 && (queued > MAX_QUEUED_BYTES || stalled) {
-            return false;
-        }
-        if self.backlog.bytes.fetch_add(l.len(), Ordering::AcqRel) == 0 {
+        if queued == 0 {
+            // Set before the bytes are counted, so a concurrent sender never sees bytes with an old time.
             self.backlog.since.store(now, Ordering::Release);
+        } else {
+            let stalled = now.saturating_sub(self.backlog.since.load(Ordering::Acquire)) > STALL_MS;
+            if queued > MAX_QUEUED_BYTES || stalled {
+                return false;
+            }
         }
+        self.backlog.bytes.fetch_add(l.len(), Ordering::AcqRel);
         // An error means the writer is gone and the session is ending; its Leave follows.
         let _ = self.tx.send(l);
         true
@@ -339,7 +351,7 @@ async fn write_loop(
                 let _ = close.send(true);
                 return;
             }
-            backlog.since.store(now_ms(), Ordering::Release);
+            backlog.since.store(mono_ms(), Ordering::Release);
         }
         backlog.bytes.fetch_sub(data.len(), Ordering::AcqRel);
     }
