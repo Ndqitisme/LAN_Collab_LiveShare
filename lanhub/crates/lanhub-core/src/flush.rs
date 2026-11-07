@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use crate::history::BlobRecord;
 use crate::util::{log, random_hex};
 
 pub const FLUSH_DELAY: Duration = Duration::from_millis(500);
@@ -49,6 +50,19 @@ pub enum IoJob {
         abs: PathBuf,
         bytes: Vec<u8>,
         what: &'static str,
+    },
+    /// `Write` of a blob, recorded as a history run with the bytes the file held before.
+    WriteRecorded {
+        abs: PathBuf,
+        bytes: Vec<u8>,
+        done: oneshot::Sender<IoResult<Vec<u8>>>,
+        record: BlobRecord,
+    },
+    /// `Remove` of a blob, recorded as a history delete run with its last bytes.
+    RemoveRecorded {
+        abs: PathBuf,
+        done: oneshot::Sender<IoResult<Vec<u8>>>,
+        record: BlobRecord,
     },
     /// Answered once every job queued before it is done.
     Barrier { done: oneshot::Sender<()> },
@@ -176,6 +190,30 @@ fn run(job: IoJob) {
             if let Err(e) = append(&abs, &bytes) {
                 log(format!("[LỖI] không lưu được {what}: {e}"));
             }
+        }
+        // The run is handed to the history thread before `done`, so it is queued ahead of anything the
+        // actor records after this job.
+        IoJob::WriteRecorded {
+            abs,
+            bytes,
+            done,
+            record,
+        } => {
+            let mut record = record;
+            let old = record.before.take().or_else(|| std::fs::read(&abs).ok());
+            let r = write_file_atomic(&abs, &bytes);
+            if r.is_ok() {
+                record.written(old, bytes);
+            }
+            let _ = done.send(r.map(|_| Vec::new()).map_err(|e| e.to_string()));
+        }
+        IoJob::RemoveRecorded { abs, done, record } => {
+            let old = std::fs::read(&abs).ok();
+            let r = remove_file_force(&abs);
+            if let (Ok(()), Some(old)) = (&r, old) {
+                record.removed(old);
+            }
+            let _ = done.send(r.map(|_| Vec::new()).map_err(|e| e.to_string()));
         }
         IoJob::Barrier { done } => {
             let _ = done.send(());

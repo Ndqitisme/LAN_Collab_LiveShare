@@ -21,10 +21,11 @@ allow = ["github:alice", "microsoft:bob@example.com"]   # empty: every token hol
 exclude = ["build/**"]              # on top of the built-in patterns
 advertise = true                    # list the name in discovery replies and project_unknown
 
-[project.history]
-idle_minutes = 15
-keep_days = 30
-max_mb = 2048
+[project.history]                   # edit runs in .lan-collab\history (docs/protocol.md section 12)
+enabled = true                      # false: no history; changing it restarts the project
+idle_minutes = 15                   # a run ends after this long without an edit by its author
+keep_days = 30                      # closed runs older than this are pruned
+max_mb = 2048                       # then the oldest runs until history fits; the newest run of a file stays
 
 [[project]]
 name = "Docs"

@@ -93,7 +93,8 @@ max_mb = 100
         HistorySettings {
             idle_minutes: 5,
             keep_days: 7,
-            max_mb: 100
+            max_mb: 100,
+            ..HistorySettings::default()
         }
     );
 }

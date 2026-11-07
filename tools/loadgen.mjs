@@ -105,7 +105,8 @@ class Client {
       if (chatSentAt.has(m.msg.text)) chatLatency.push(performance.now() - chatSentAt.get(m.msg.text));
       return;
     }
-    if (m.path !== FILE) return;
+    // history_changed (feature history) also names the file; it is not an answer to an op.
+    if (m.path !== FILE || m.t === 'history_changed') return;
     if (m.t === 'file') {
       this.rev = m.rev;
       this.len = m.text.length;

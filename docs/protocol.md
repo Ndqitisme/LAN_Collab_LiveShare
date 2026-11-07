@@ -4,7 +4,7 @@ This is the wire contract between a LAN Collab hub and its clients. The Node hub
 
 Words: **must** is required for conformance, **should** is expected unless there is a stated reason, **may** is optional. "Hub" alone means any hub. "Node hub" and "lanhub" name one implementation.
 
-Contents: [1 Transport](#1-transport) · [2 Paths, text and operations](#2-paths-text-and-operations) · [3 Handshake](#3-handshake) · [4 Errors and refusals](#4-errors-and-refusals) · [5 Client to hub](#5-client-to-hub) · [6 Hub to client](#6-hub-to-client) · [7 Activity](#7-activity) · [8 Presence and RTT](#8-presence-and-rtt) · [9 Features](#9-features) · [10 LAN discovery](#10-lan-discovery) · [11 Invite codes](#11-invite-codes) · [12 History (reserved)](#12-history-reserved) · [13 lanhub-only transport features](#13-lanhub-only-transport-features) · [14 Protocol 1 compatibility](#14-protocol-1-compatibility) · [15 Client rendering](#15-client-rendering) · [16 CLI contract for tests](#16-cli-contract-for-tests)
+Contents: [1 Transport](#1-transport) · [2 Paths, text and operations](#2-paths-text-and-operations) · [3 Handshake](#3-handshake) · [4 Errors and refusals](#4-errors-and-refusals) · [5 Client to hub](#5-client-to-hub) · [6 Hub to client](#6-hub-to-client) · [7 Activity](#7-activity) · [8 Presence and RTT](#8-presence-and-rtt) · [9 Features](#9-features) · [10 LAN discovery](#10-lan-discovery) · [11 Invite codes](#11-invite-codes) · [12 History](#12-history) · [13 lanhub-only transport features](#13-lanhub-only-transport-features) · [14 Protocol 1 compatibility](#14-protocol-1-compatibility) · [15 Client rendering](#15-client-rendering) · [16 CLI contract for tests](#16-cli-contract-for-tests)
 
 ## 1. Transport
 
@@ -128,6 +128,7 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
 | `chat` | `text`, `image?` | See 5.3. |
 | `media` | `id` | Replies `media {id, mime, b64}` with the bytes of a chat image, or `media {id, missing: true}` when the id is malformed or the file is gone. |
 | `ping` | none | Replies `pong {ts}` (section 6). |
+| `history_list`, `history_blob`, `checkpoint_create`, `checkpoint_list` | see section 12 | Only with feature `history`. |
 
 ### 5.1 op
 
@@ -188,6 +189,7 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
 | `media` | `id`, `mime`, `b64` or `id`, `missing` | Answer to `media`. |
 | `pong` | `ts` | Answer to `ping`, and the keep-alive during a large upload (section 1). `ts` is the hub's clock in ms since the Unix epoch. |
 | `rejected` | `code`, `path?`, `data?` | Reserved for C5 (4.2). |
+| `history_runs`, `history_blob`, `history_changed`, `checkpoint_list` | see section 12 | Only with feature `history`. |
 
 ### 6.1 welcome
 
@@ -320,18 +322,96 @@ The Node hub prints one line `Mã mời: LC3-...` at start with every non-intern
 
 `LC-` codes hold one address. `decodeInvite` in `lib/common.js` reads both: version 1 is the binary form (byte 1, four IPv4 bytes, big-endian port, token length, token bytes as hex, project as UTF-8) and version 2 is byte 2 followed by JSON `{h, p, n, t}`. The Node hub still prints one `Mã mời (<ip>): LC-...` line per address so 0.1.1 extensions can join. I1 removes both forms.
 
-## 12. History (reserved)
+## 12. History
 
-These message types are reserved for edit-run history and are filled in by A5 (README section 5.6). Until then no hub sends them, a hub that does not list `history` in `features` ignores them as unknown messages, and a client must not send them to such a hub.
+Edit-run history (plan README section 5.6). These messages work only when `welcome.features` lists `history`. A hub that does not list it ignores them as unknown messages, and a client must not send them to such a hub. lanhub lists `history` from A5 for every project whose history store opened. It leaves it out, and logs one warning naming the folder, when the store cannot be opened (for example SQLite cannot use WAL on a network drive), and when history is turned off (`[project.history] enabled = false` or `--no-history`). The Node hub never lists it.
 
 | `t` | Direction | Purpose |
 |---|---|---|
-| `history_list` | client to hub, hub reply | List the edit runs of a file. |
-| `history_runs` | hub to client | A page of edit-run records. |
-| `history_blob` | client to hub, hub reply | Fetch the content stored for a run boundary by its SHA-256. |
-| `history_changed` | hub to client | Edit runs of a file changed (a run ended or was pruned). |
-| `checkpoint_create` | client to hub | Create a named restore point. |
-| `checkpoint_list` | client to hub, hub reply | List restore points. |
+| `history_list` | client to hub | List edit runs, of one file or of the project. Answered by `history_runs`. |
+| `history_runs` | hub to client | A page of run records. |
+| `history_blob` | client to hub, hub reply (same `t`) | Fetch the content stored for a run boundary, by its SHA-256. |
+| `history_changed` | hub to client | The runs of a file changed: a run started or ended, or retention removed some. |
+| `checkpoint_create` | client to hub | Create a named restore point. Every member then receives `checkpoint_list`. |
+| `checkpoint_list` | client to hub, hub reply (same `t`) | List restore points. |
+
+### 12.1 Edit runs
+
+- A **run** is the consecutive ops of one author on one file. The author is the member's `hello.uid`, so a reconnect of the same client session continues its run and a new session (a VS Code window reload) starts a new one.
+- The hub ends the open run of a file when another author's op is applied to it, when its author has not edited it for `idle_minutes` (default 15; a gap of exactly `idle_minutes` ends it), when any member creates a checkpoint, when the file is deleted, renamed (a case-only rename retires the old name, section 5.2) or replaced by a blob, and when the hub stops. An op whose `src`, or whose `reverts`, differs from the open run's also starts a new run, so every run has one source.
+- Times are the hub's clock in milliseconds since the Unix epoch. A run that ended because another author edited or because of the idle gap has `ended_at` at its own last op. A run ended by a checkpoint, a delete, a rename, a replacement or a hub stop has `ended_at` at that event. A hub killed without a stop ends the runs it left open when it starts again: `ended_at` keeps the last op it had recorded and `end_blob` is the file as the restarted hub loaded it from disk.
+- `source` is the op's `src` (`editor`, `disk`, `revert`, `merge`; unknown or absent is `editor`), or `delete` for a deletion run.
+- A **deletion** is a run of its own by the member who deleted the file: `source` `delete`, `op_count` 1, `start_blob` and `end_blob` both the content the file had (so it can be restored), `chars_removed` its length for a text file.
+- A **blob file** gets one closed run for every `create` or `put` that stores it: `kind` `blob`, `source` `disk`, `op_count` 1, `start_blob` the bytes the file held before (`null` when it did not exist), `end_blob` the new bytes, character counts 0. Deleting a blob file records a deletion run with `kind` `blob`.
+- Text runs record the file's text at their start and end, encoded as UTF-8. The ops themselves are not stored.
+- lanhub keeps the index in `<history>/history.db` (SQLite, WAL) and contents in `<history>/blobs/<first 2 hex>/<sha256>.zst` (zstd), where `<history>` is `--history` or `<root>/.lan-collab/history`. Files the Node hub wrote in that folder (snapshots, `chat.jsonl`, `chat-media/`) stay as they are.
+
+### 12.2 Run record
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Decimal digits. Unique within the project's history and never reused; a larger id is a later run. |
+| `path` | string | The file. A deleted file keeps its runs under its path. |
+| `author_uid` | string | The author's `hello.uid`. |
+| `author_name` | string | The author's display name when the run started. |
+| `color` | string | The author's member color when the run started. |
+| `source` | string | `editor`, `disk`, `revert`, `merge` or `delete` (12.1). |
+| `kind` | string | `text` or `blob`. |
+| `started_at` | integer | First op, in ms. |
+| `ended_at` | integer | End of the run (12.1). For an open run, the time of its latest op so far. |
+| `op_count` | integer | Ops applied in the run. |
+| `chars_added` | integer | UTF-16 code units inserted, counted on the ops as the hub applied them (after transform). |
+| `chars_removed` | integer | UTF-16 code units deleted, same counting. |
+| `start_blob` | string or null | SHA-256 (64 lowercase hex) of the content before the run. `null` only for a blob run that created the file. |
+| `end_blob` | string or null | SHA-256 of the content after the run. `null` while the run is open. |
+| `reverts` | string or null | The `op.reverts` of a `revert` run: the id of the run it undoes. |
+| `open` | boolean | The run has not ended yet (it is the file's current run). |
+
+### 12.3 history_list and history_runs
+
+`{"t":"history_list","path"?:<string>,"before"?:<string>,"limit"?:<integer>}`
+
+- `path` selects one file; without it (or `null`) the runs of every file are listed. An unsafe path (section 2) is ignored with no reply.
+- Runs come newest first (descending `id`). `before` is a run id; only runs with a smaller id are listed. A `before` that is not a string of decimal digits is ignored with no reply.
+- `limit` defaults to 50 and is clamped to 1-200.
+
+Reply to the sender only: `{"t":"history_runs","path":<string or null>,"before":<string or null>,"runs":[<run record>...],"more":<boolean>}`. `path` and `before` echo the request, so a client can match replies to requests. `more` is true when older runs exist; the next page is asked with `before` set to the `id` of the last run received.
+
+A request sent after an op or a `history_changed` sees that op's effect: the hub answers history requests in order with the run changes before them.
+
+### 12.4 history_blob
+
+`{"t":"history_blob","blob":<sha256>}` asks for the content stored under `blob`, a `start_blob` or `end_blob` of some run.
+
+Reply to the sender only, one of:
+
+- `{"t":"history_blob","blob":<sha256>,"kind":"text","text":<string>}` when the bytes are UTF-8 with no NUL byte. The UTF-8 encoding of `text` is exactly the stored bytes.
+- `{"t":"history_blob","blob":<sha256>,"kind":"blob","b64":<base64>}` otherwise.
+- `{"t":"history_blob","blob":<as sent>,"missing":true}` when no content is stored under that hash (never stored, removed by retention, or not a 64-character lowercase hex string).
+
+A `blob` that is not a string is ignored with no reply. The `kind` of the reply describes the bytes, not the file: a blob file whose bytes happen to be UTF-8 comes back as `text`, and its UTF-8 encoding gives the bytes back.
+
+### 12.5 history_changed
+
+`{"t":"history_changed","path":<string>}` goes to every member, the cause included, when a run of `path` starts or ends (an author switch does both), a blob run or a deletion run is recorded, or retention removes runs of `path`. The hub sends at most one per path per second: a change within a second of the previous message for that path is announced once, when that second is over (several members typing in one file make almost every op a boundary). It carries no records: a client showing that file's history asks `history_list` again. No message is sent for the counters of an open run growing.
+
+### 12.6 checkpoint_create and checkpoint_list
+
+`{"t":"checkpoint_create","name":<string>}` creates a restore point. The hub trims `name` and truncates it to 100 characters; an empty or missing name is ignored with no reply. The hub first ends every open run of the project, at the checkpoint time (each gets a `history_changed`), then stores the checkpoint and sends `checkpoint_list` with every checkpoint to every member, the creator included.
+
+`{"t":"checkpoint_list"}` gets the same reply to the sender only:
+
+`{"t":"checkpoint_list","checkpoints":[{"id":<string>,"name":<string>,"created_at":<integer>,"author_uid":<string>,"author_name":<string>,"color":<string>,"last_run":<string or null>}...]}`, oldest first. `last_run` is the newest run id when the checkpoint was made (`null` when there was no run), so the state of a file at the checkpoint is the `end_blob` of its newest run with an id up to `last_run`, and the runs after it are those with a larger id.
+
+### 12.7 Retention
+
+lanhub prunes each project's history when the project starts, every hour, when `keep_days` or `max_mb` changes in `lanhub.toml`, and between the hourly passes once the history is over `max_mb` and a tenth of `max_mb` has been written since the last pass. It removes closed runs that ended more than `keep_days` (default 30) days ago, then the oldest closed runs until `history.db` plus the blobs the remaining runs reference fit in `max_mb` (default 2048) MiB, then every blob no run references. The newest run of each path (so a deleted file stays restorable) and every open run are never removed. A pass right after another removes nothing. Checkpoints are kept; a `last_run` may name a removed run. Removing runs of a path sends `history_changed` for it.
+
+### 12.8 Using runs (informative)
+
+- **View a run.** Fetch `end_blob` (the file after the run) and `start_blob` (before it) and show them side by side read-only, or diff either against the current text. Copying from them needs nothing from the hub.
+- **Undo a run** (B7) is a three-way merge like `git revert`: base is the run's `end_blob`, "theirs" its `start_blob`, "ours" the client's current text. The result is applied as a normal edit whose ops carry `src: "revert"` and `reverts: <run id>`, so it syncs to everyone and is recorded as a new `revert` run. History is never rewritten, so OT convergence is unaffected. A blob run is undone by a `put` of its `start_blob`.
+- **Restore a deleted file.** The deletion run's `end_blob` holds the deleted content; the client creates the file from it (`create`).
 
 ## 13. lanhub-only transport features
 
@@ -407,6 +487,8 @@ Not part of the wire protocol. Both hubs implement it so `test/conformance/` and
 | `--token <secret>` | Project token. The Node hub also reads `LAN_COLLAB_TOKEN`. |
 | `--allow-file <file>` | Account allow list (3.3). |
 | `--history <dir>` | History folder, default `<root>/.lan-collab/history`. |
+| `--no-history` | lanhub only: no edit-run history (`history` stays out of `features`). In `--config` mode it applies to every project. |
+| `--history-idle-ms <n>` | lanhub only, for tests: a run ends after `n` ms without an edit by its author instead of `idle_minutes`. In `--config` mode it applies to every project. |
 | `--exclude "a,b"` | Extra exclude patterns, comma-separated. |
 | `--name <name>` | Hub display name (`hubName`). |
 | `--log-format json` | With it, the hub prints `{"event":"listening","port":N}` as one stdout line once the TCP port and, when enabled, the discovery port are bound. Other stdout lines are human logs and never start with `{"event"`. |
