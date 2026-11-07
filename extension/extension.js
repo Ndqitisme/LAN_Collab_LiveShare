@@ -6,7 +6,8 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
-const { CollabClient, renderHubMessage } = require('../lib/client-core');
+const { CollabClient, hubErrorText } = require('../lib/client-core');
+const { t } = require('../lib/i18n');
 const { EditorBinding } = require('../lib/editor-binding');
 const { ChatView } = require('./chat-view');
 const { LineSocket, PROTO_V2, encodeInvite, decodeInvite } = require('../lib/common');
@@ -23,6 +24,7 @@ let presenceTimer = null;
 let decoTimer = null;
 let lastState = 'off';
 let connecting = false;
+let reachedHub = false;
 let chatView;
 let unread = 0;
 let lastEditor = null;
@@ -109,7 +111,7 @@ function probe(conn) {
   return new Promise((resolve) => {
     const sock = net.createConnection({ host: conn.host, port: conn.port });
     const ls = new LineSocket(sock);
-    ls.on('close', () => done(`hub ${conn.host}:${conn.port} đóng kết nối`));
+    ls.on('close', () => done(t('connect.error.closed', { host: conn.host, port: conn.port })));
     let finished = false;
     const done = (err) => {
       if (finished) return;
@@ -118,19 +120,27 @@ function probe(conn) {
       ls.close();
       resolve(err);
     };
-    const timer = setTimeout(() => done(`hub ${conn.host}:${conn.port} không phản hồi. Kiểm tra hub đang chạy và tường lửa đã mở cổng ${conn.port}.`), 6000);
+    const timer = setTimeout(() => {
+      log(`Kiểm tra ${conn.host}:${conn.port}: không phản hồi sau 6 giây.`);
+      done(t('connect.error.timeout', { host: conn.host, port: conn.port, seconds: 6 }));
+    }, 6000);
     sock.on('connect', () => ls.send({ t: 'hello', probe: true, proto: PROTO_V2, token: conn.token, project: conn.project }));
-    const mine = { project: conn.project, proto: PROTO_V2 };
+    const mine = { host: conn.host, port: conn.port, project: conn.project, proto: PROTO_V2 };
     ls.on('message', (m) => {
       if (m && m.t === 'probe_result') {
         // account rules are checked again with the real account
         const code = !m.proto_ok ? 'protocol_version' : !m.project_ok ? 'project_unknown' : !m.token_ok ? 'token_invalid' : null;
-        done(code && renderHubMessage(code, { ...m, ...mine }));
+        if (code) log(`Kiểm tra ${conn.host}:${conn.port}: LAN Hub từ chối (${code}).`);
+        done(code && hubErrorText(code, { ...m, ...mine }));
       } else if (m && m.t === 'error') {
-        done(typeof m.message === 'string' ? m.message : renderHubMessage(m.code, { ...m.data, ...mine }));
+        log(`Kiểm tra ${conn.host}:${conn.port}: LAN Hub từ chối: ${typeof m.message === 'string' ? m.message : m.code}`);
+        done(typeof m.message === 'string' ? m.message : hubErrorText(m.code, { ...m.data, ...mine }));
       }
     });
-    ls.on('error', (e) => done(`không kết nối được ${conn.host}:${conn.port}: ${e.message}`));
+    ls.on('error', (e) => {
+      log(`Kiểm tra ${conn.host}:${conn.port}: ${e.message}`);
+      done(e.code === 'ECONNREFUSED' ? t('connect.error.refused', { host: conn.host, port: conn.port }) : t('connect.error.failed', { host: conn.host, port: conn.port }));
+    });
   });
 }
 
@@ -144,21 +154,21 @@ function isEmptyDir(p) {
 
 async function join(codeArg) {
   if (core) {
-    vscode.window.showWarningMessage('LAN Collab: đang ở trong một phòng. Ngắt kết nối trước khi tham gia phòng khác.');
+    vscode.window.showWarningMessage(t('join.error.connected', { project: core.project }));
     return;
   }
   const code = typeof codeArg === 'string' ? codeArg : await vscode.window.showInputBox({
-    prompt: 'Dán mã mời (bắt đầu bằng LC-). Lấy mã ở cửa sổ hub, hoặc nhờ người đã vào phòng bấm "Sao chép mã mời".',
-    placeHolder: 'LC-…',
+    prompt: t('join.input.prompt'),
+    placeHolder: t('join.input.placeholder'),
     ignoreFocusOut: true,
-    validateInput: (v) => (decodeInvite(v) ? null : 'Mã không hợp lệ'),
+    validateInput: inviteProblem,
   });
   if (!code) return;
   const conn = decodeInvite(code);
   if (!conn) return;
-  const err = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `LAN Collab: kiểm tra hub ${conn.host}:${conn.port}…` }, () => probe(conn));
+  const err = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('join.progress.probe', { host: conn.host, port: conn.port }) }, () => probe(conn));
   if (err) {
-    vscode.window.showErrorMessage(`LAN Collab: ${err}`);
+    vscode.window.showErrorMessage(err);
     return;
   }
 
@@ -166,15 +176,15 @@ async function join(codeArg) {
   if (!(target && target.uri.scheme === 'file' && isEmptyDir(target.uri.fsPath))) {
     const picked = await vscode.window.showOpenDialog({
       canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
-      openLabel: `Tải dự án "${conn.project}" vào đây`,
-      title: 'Chọn hoặc tạo một thư mục trống để chứa dự án',
+      openLabel: t('join.folder.openLabel'),
+      title: t('join.folder.title', { project: conn.project }),
     });
     if (!picked) return;
     target = { uri: picked[0] };
     if (!isEmptyDir(target.uri.fsPath)) {
       const go = await vscode.window.showWarningMessage(
-        `Thư mục ${target.uri.fsPath} đã có file. File khác bản chung sẽ bị thay (bản cũ sao lưu vào .lan-collab/backup); file chỉ có ở đây sẽ được gửi lên hub. Tiếp tục?`,
-        { modal: true }, 'Tiếp tục');
+        t('join.folder.notEmpty', { path: target.uri.fsPath }),
+        { modal: true }, t('sync.button.sync'));
       if (!go) return;
     }
   }
@@ -187,10 +197,17 @@ async function join(codeArg) {
   else vscode.commands.executeCommand('vscode.openFolder', target.uri); // the window reloads and connects on start
 }
 
+// The input box message for a pasted code, or null when it decodes or nothing is typed yet.
+function inviteProblem(value) {
+  const code = String(value || '').replace(/\s+/g, '');
+  if (!code || decodeInvite(code)) return null;
+  return /^LC3?-/.test(code) ? t('join.input.unreadable') : t('join.input.badPrefix');
+}
+
 async function copyInvite() {
   const conn = folder && connectionFor(folder);
   if (!conn) {
-    vscode.window.showWarningMessage('LAN Collab: thư mục này chưa gắn với hub nào.');
+    vscode.window.showWarningMessage(t('connect.unbound'));
     return;
   }
   let host = conn.host;
@@ -200,7 +217,7 @@ async function copyInvite() {
   }
   const code = encodeInvite({ ...conn, host });
   await vscode.env.clipboard.writeText(code);
-  vscode.window.showInformationMessage(`LAN Collab: đã chép mã mời vào clipboard: ${code}. Người nhận chạy "LAN Collab: Tham gia bằng mã". Mã có chứa token, chỉ gửi cho người trong nhóm.`);
+  vscode.window.showInformationMessage(t('invite.copied'));
 }
 
 // After joining, files keep arriving for a moment: show it, so nobody starts editing a half-downloaded tree.
@@ -213,26 +230,26 @@ function showDownloadProgress() {
     skipped += 1;
   };
   c.on('ignored', onIgnored);
-  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LAN Collab: đang đồng bộ dự án', cancellable: true }, (progress, cancel) => new Promise((resolve) => {
+  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('sync.progress.title', { project: c.project }), cancellable: true }, (progress, cancel) => new Promise((resolve) => {
     let shown = 0;
-    let t = null;
+    let timer = null;
     const finish = (message) => {
-      clearInterval(t);
+      clearInterval(timer);
       c.off('ignored', onIgnored);
       if (message) vscode.window.showInformationMessage(message);
       resolve();
     };
     // Closing the notification only hides it; synchronization continues in the background.
     cancel.onCancellationRequested(() => finish(null));
-    t = setInterval(() => {
+    timer = setInterval(() => {
       const done = total - c.loading.size;
-      progress.report({ message: `${done}/${total} file`, increment: ((done - shown) / total) * 100 });
+      progress.report({ message: t('sync.progress.count', { done, total }), increment: ((done - shown) / total) * 100 });
       shown = done;
       if (core !== c) finish(null);
       else if (c.loading.size === 0) {
         finish(skipped
-          ? `LAN Collab: đã đồng bộ ${total - skipped}/${total} file. ${skipped} file không được hub nhận, xem chi tiết trong nhật ký (LAN Collab: Xem nhật ký).`
-          : `LAN Collab: đã đồng bộ ${total} file.`);
+          ? t('sync.doneSkipped', { synced: total - skipped, total, skipped })
+          : t('sync.done', { total }));
       }
     }, 200);
   }));
@@ -251,7 +268,7 @@ function log(line) {
 
 async function connect() {
   if (core || connecting) {
-    vscode.window.showInformationMessage('LAN Collab đang kết nối rồi.');
+    vscode.window.showInformationMessage(core ? t('connect.already', { project: core.project }) : t('connect.busy'));
     return;
   }
   connecting = true;
@@ -266,14 +283,14 @@ async function startClient() {
   const cfg = vscode.workspace.getConfiguration('lanCollab');
   folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
   if (!folder || folder.uri.scheme !== 'file') {
-    const pick = await vscode.window.showWarningMessage('LAN Collab: chưa mở thư mục nào. Có mã mời thì tham gia luôn, dự án sẽ được tải về một thư mục trống.', 'Tham gia bằng mã');
+    const pick = await vscode.window.showWarningMessage(t('connect.noFolder'), t('connect.button.join'));
     if (pick) join();
     return;
   }
   const conn = connectionFor(folder);
   if (!conn) {
-    const pick = await vscode.window.showWarningMessage('LAN Collab: thư mục này chưa gắn với hub nào. Dán mã mời, hoặc đặt lanCollab.server và lanCollab.project.', 'Tham gia bằng mã', 'Mở Settings');
-    if (pick === 'Tham gia bằng mã') join();
+    const pick = await vscode.window.showWarningMessage(t('connect.unbound'), t('connect.button.join'), t('connect.button.settings'));
+    if (pick === t('connect.button.join')) join();
     else if (pick) vscode.commands.executeCommand('workbench.action.openWorkspaceSettings', 'lanCollab');
     return;
   }
@@ -281,6 +298,7 @@ async function startClient() {
   const account = await getAccount(false);
   const name = String(cfg.get('name') || '').trim() || (account && account.label) || `${os.userInfo().username}@${os.hostname()}`;
 
+  reachedHub = false;
   core = new CollabClient({
     root: folder.uri.fsPath,
     host,
@@ -303,13 +321,14 @@ async function startClient() {
   core.on('status', updateStatus);
   core.on('fatal', async (msg, code) => {
     disconnect();
-    const accountRefused = code === 'account_required' || code === 'account_denied';
-    const pick = await vscode.window.showErrorMessage(`LAN Collab: ${msg}`, ...(accountRefused ? ['Dùng tài khoản VS Code'] : []));
+    const button = { account_required: t('error.button.signIn'), account_denied: t('error.button.switchAccount') }[code];
+    const pick = await vscode.window.showErrorMessage(msg, ...(button ? [button] : []));
     if (pick) signIn();
   });
   core.on('chat', (msg) => chatView.onMessage(msg));
   core.on('chat-rejected', (reason) => chatView.onRejected(reason));
   core.on('ready', () => {
+    reachedHub = true;
     chatView.refresh();
     showDownloadProgress();
     for (const doc of vscode.workspace.textDocuments) bindDoc(doc);
@@ -347,7 +366,7 @@ async function startClient() {
     tree.refresh();
   });
   core.on('backup', (dir) => {
-    vscode.window.showWarningMessage(`LAN Collab: bản khác bản chung trên máy này đã được sao lưu vào ${dir}`);
+    vscode.window.showWarningMessage(t('sync.backup', { dir }));
   });
 
   watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*'));
@@ -383,21 +402,21 @@ function disconnect() {
 // Returns false (cancel), true (go ahead; conflicting files take the hub's version) or 'local'.
 async function confirmSync(info) {
   const lines = [
-    `Đồng bộ thư mục "${folder.name}" với hub (dự án "${info.project}")?`,
+    t('sync.confirm.title', { folder: folder.name, project: info.project }),
     '',
-    `• Tải về ${info.get} file, ghi đè ${info.overwrite} file khác bản chung`,
-    `• Gửi lên ${info.upload} file sửa/tạo trên máy này`,
-    `• Xoá ${info.removeLocal} file đã bị xoá trên hub`,
+    t('sync.confirm.get', { get: info.get, overwrite: info.overwrite }),
+    t('sync.confirm.upload', { upload: info.upload }),
+    t('sync.confirm.remove', { removeLocal: info.removeLocal }),
   ];
   if (info.conflicts.length) {
     const names = info.conflicts.slice(0, 8).join(', ') + (info.conflicts.length > 8 ? ', …' : '');
-    lines.push('', `${info.conflicts.length} file đã thay đổi cả trên máy này (trong lúc chưa kết nối) và trên hub: ${names}`,
-      'Chọn bản nào được giữ cho các file này; bản bị thay luôn được sao lưu.');
+    lines.push('', t('sync.confirm.conflicts', { count: info.conflicts.length, names }), t('sync.confirm.conflictsHint'));
   }
-  lines.push('', 'File bị ghi đè/xoá được sao lưu vào .lan-collab/backup.');
-  const buttons = info.conflicts.length ? ['Lấy bản chung', 'Giữ bản máy này'] : ['Đồng bộ'];
+  lines.push('', t('sync.confirm.backup'));
+  const keepLocal = t('sync.button.keepLocal');
+  const buttons = info.conflicts.length ? [t('sync.button.useHub'), keepLocal] : [t('sync.button.sync')];
   const pick = await vscode.window.showWarningMessage(lines.join('\n'), { modal: true }, ...buttons);
-  if (pick === 'Giữ bản máy này') return 'local';
+  if (pick === keepLocal) return 'local';
   return Boolean(pick);
 }
 
@@ -580,7 +599,7 @@ async function goTo(id) {
   const u = core && core.users.get(id);
   if (!u) return;
   if (!u.presence || !u.presence.file) {
-    vscode.window.showInformationMessage(`${u.name} không mở file nào trong dự án.`);
+    vscode.window.showInformationMessage(t('follow.noFile', { name: u.name }));
     return;
   }
   await reveal(u, false);
@@ -603,24 +622,24 @@ async function reveal(u, preserveFocus) {
 
 async function pickFollow() {
   if (!core || !core.ready) {
-    vscode.window.showWarningMessage('LAN Collab chưa kết nối.');
+    vscode.window.showWarningMessage(t('connect.notConnected'));
     return;
   }
   const items = [...core.users.values()].map((u) => ({ label: u.name, description: describe(u.presence, u.status), id: u.id }));
   if (!items.length) {
-    vscode.window.showInformationMessage('Chưa có ai khác trong phòng.');
+    vscode.window.showInformationMessage(t('follow.nobody'));
     return;
   }
-  const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Đi theo ai? (màn hình của bạn sẽ nhảy theo file/dòng của họ)' });
+  const pick = await vscode.window.showQuickPick(items, { placeHolder: t('follow.placeholder') });
   if (pick) setFollowing(pick.id);
 }
 
 async function setStatus() {
   if (!core) {
-    vscode.window.showWarningMessage('LAN Collab chưa kết nối.');
+    vscode.window.showWarningMessage(t('connect.notConnected'));
     return;
   }
-  const text = await vscode.window.showInputBox({ prompt: 'Bạn đang làm gì? (để trống để xoá)', value: core.status });
+  const text = await vscode.window.showInputBox({ prompt: t('status.input.prompt'), value: core.status });
   if (text !== undefined) core.setStatus(text.trim());
 }
 
@@ -654,13 +673,11 @@ async function getAccount(interactive) {
 
   const items = accounts.map((a) => ({
     label: `${a.provider === 'github' ? '$(github)' : '$(account)'} ${a.label}`,
-    description: `${a.provider}${same(a) ? ' · đang dùng' : ''}`,
+    description: same(a) ? t('account.pick.current', { provider: a.provider }) : a.provider,
     account: a,
   }));
-  for (const p of PROVIDERS) items.push({ label: `$(sign-in) Đăng nhập tài khoản ${p.id === 'github' ? 'GitHub' : 'Microsoft'} khác…`, provider: p });
-  const pick = await vscode.window.showQuickPick(items, {
-    placeHolder: 'Dùng tài khoản nào để đồng đội nhận ra bạn? (chỉ gửi tên tài khoản lên hub)',
-  });
+  for (const p of PROVIDERS) items.push({ label: `$(sign-in) ${t('account.pick.signIn', { provider: providerName(p.id) })}`, provider: p });
+  const pick = await vscode.window.showQuickPick(items, { placeHolder: t('account.pick.placeholder') });
   if (!pick) return null;
   let account = pick.account;
   if (!account) {
@@ -668,7 +685,8 @@ async function getAccount(interactive) {
       const s = await vscode.authentication.getSession(pick.provider.id, pick.provider.scopes, { createIfNone: true, clearSessionPreference: true });
       account = { provider: pick.provider.id, label: s.account.label };
     } catch (e) {
-      vscode.window.showErrorMessage(`LAN Collab: không đăng nhập được ${pick.provider.id}: ${e.message}`);
+      log(`Đăng nhập ${pick.provider.id} lỗi: ${e.message}`);
+      vscode.window.showErrorMessage(t('account.signInFailed', { provider: providerName(pick.provider.id) }));
       return null;
     }
   }
@@ -676,10 +694,14 @@ async function getAccount(interactive) {
   return account;
 }
 
+function providerName(id) {
+  return id === 'github' ? 'GitHub' : 'Microsoft';
+}
+
 async function signIn() {
   const account = await getAccount(true);
   if (!account) return;
-  vscode.window.showInformationMessage(`LAN Collab: dùng tài khoản ${account.provider}:${account.label}.`);
+  vscode.window.showInformationMessage(t('account.chosen', { account: `${account.provider}:${account.label}` }));
   disconnect();
   connect();
 }
@@ -694,7 +716,7 @@ function sendLocation() {
 async function openRef(ref, line) {
   const rel = core && core.relOf(path.join(folder.uri.fsPath, ref.replace(/\\/g, '/')));
   if (!rel || !core.entries.has(rel)) {
-    vscode.window.showWarningMessage(`LAN Collab: không có file ${ref} trong dự án.`);
+    vscode.window.showWarningMessage(t('ref.missing', { path: ref }));
     return;
   }
   const ed = await vscode.window.showTextDocument(vscode.Uri.file(path.join(folder.uri.fsPath, rel)), { preview: true });
@@ -706,41 +728,51 @@ async function openRef(ref, line) {
 async function menu() {
   const items = [];
   if (!core) {
-    items.push({ label: '$(plug) Kết nối', run: connect });
-    items.push({ label: '$(key) Tham gia bằng mã…', run: () => join() });
+    items.push({ label: `$(plug) ${t('menu.connect')}`, run: connect });
+    items.push({ label: `$(key) ${t('menu.join')}`, run: () => join() });
   } else {
-    items.push({ label: '$(link) Sao chép mã mời', run: copyInvite });
-    items.push({ label: `$(comment-discussion) Mở chat${unread ? ` (${unread} tin mới)` : ''}`, run: () => vscode.commands.executeCommand('lanCollab.openChat') });
-    items.push({ label: '$(eye) Đi theo một người…', run: pickFollow });
-    if (following) items.push({ label: '$(eye-closed) Thôi đi theo', run: () => setFollowing(null) });
-    items.push({ label: '$(comment) Đặt trạng thái…', run: setStatus });
-    items.push({ label: '$(debug-disconnect) Ngắt kết nối', run: disconnect });
+    items.push({ label: `$(link) ${t('menu.copyInvite')}`, run: copyInvite });
+    items.push({ label: `$(comment-discussion) ${unread ? t('menu.openChatUnread', { count: unread }) : t('menu.openChat')}`, run: () => vscode.commands.executeCommand('lanCollab.openChat') });
+    items.push({ label: `$(eye) ${t('menu.follow')}`, run: pickFollow });
+    if (following) items.push({ label: `$(eye-closed) ${t('menu.unfollow')}`, run: () => setFollowing(null) });
+    items.push({ label: `$(comment) ${t('menu.setStatus')}`, run: setStatus });
+    items.push({ label: `$(debug-disconnect) ${t('menu.disconnect')}`, run: disconnect });
   }
-  items.push({ label: '$(account) Dùng tài khoản VS Code (GitHub/Microsoft)…', run: signIn });
-  items.push({ label: '$(output) Xem nhật ký', run: () => out.show() });
-  const pick = await vscode.window.showQuickPick(items, { placeHolder: 'LAN Collab' });
+  items.push({ label: `$(account) ${t('menu.signIn')}`, run: signIn });
+  items.push({ label: `$(output) ${t('menu.showLog')}`, run: () => out.show() });
+  const pick = await vscode.window.showQuickPick(items, { placeHolder: t('menu.placeholder') });
   if (pick) pick.run();
 }
 
 function updateStatus(state) {
   if (state) lastState = state;
-  const n = core ? core.users.size + 1 : 0;
-  const followName = following && core && core.users.get(following) ? ` · theo ${core.users.get(following).name}` : '';
-  const view = {
-    off: ['$(debug-disconnect) LAN Collab', 'Chưa kết nối — bấm để mở menu'],
-    connecting: ['$(sync~spin) LAN Collab', 'Đang kết nối hub…'],
-    offline: ['$(warning) LAN Collab mất kết nối', 'Đang thử kết nối lại; bạn vẫn sửa được, sẽ gộp khi có mạng'],
-    online: [`$(broadcast) ${n} người${followName}${unread ? ` · $(comment-discussion) ${unread}` : ''}`, unread ? `${unread} tin nhắn chat mới — bấm để mở menu` : 'LAN Collab — bấm để mở menu'],
-  }[lastState] || ['LAN Collab', ''];
-  statusItem.text = view[0];
-  statusItem.tooltip = view[1];
+  statusItem.text = '$(debug-disconnect) LAN Collab';
+  statusItem.tooltip = t('statusBar.off.tooltip');
+  if (core && lastState === 'connecting') {
+    statusItem.text = '$(sync~spin) LAN Collab';
+    statusItem.tooltip = t('statusBar.connecting.tooltip', { host: core.host, port: core.port });
+  } else if (core && lastState === 'offline' && !reachedHub) {
+    statusItem.text = `$(warning) ${t('statusBar.unreachable.text')}`;
+    statusItem.tooltip = t('statusBar.unreachable.tooltip', { host: core.host, port: core.port });
+  } else if (core && lastState === 'offline') {
+    statusItem.text = `$(warning) ${t('statusBar.offline.text')}`;
+    statusItem.tooltip = t('statusBar.offline.tooltip');
+  } else if (core && lastState === 'online') {
+    const followed = following && core.users.get(following);
+    statusItem.text = [
+      `$(broadcast) ${t('statusBar.online.text', { count: core.users.size + 1 })}`,
+      ...(followed ? [t('statusBar.online.following', { name: followed.name })] : []),
+      ...(unread ? [`$(comment-discussion) ${unread}`] : []),
+    ].join(' · ');
+    statusItem.tooltip = unread ? t('statusBar.online.unreadTooltip', { count: unread }) : t('statusBar.online.tooltip', { project: core.project });
+  }
   statusItem.show();
 }
 
 function describe(p, status) {
   const parts = [];
   if (p && p.file) parts.push(`${p.file}:${p.line}`);
-  if (p && p.debug) parts.push(`đang debug ${p.debug}`);
+  if (p && p.debug) parts.push(t('tree.debugging', { target: p.debug }));
   if (status) parts.push(`“${status}”`);
   return parts.join(' · ');
 }
@@ -766,9 +798,9 @@ class PeopleTree {
 
   getChildren(parent) {
     if (!core) {
-      const item = new vscode.TreeItem('Chưa kết nối — bấm để kết nối');
+      const item = new vscode.TreeItem(t('tree.disconnected'));
       item.iconPath = new vscode.ThemeIcon('plug');
-      item.command = { command: 'lanCollab.connect', title: 'Kết nối' };
+      item.command = { command: 'lanCollab.connect', title: t('command.lanCollab.connect.title') };
       return [item];
     }
     if (parent && parent.contextValue === 'activity') {
@@ -780,21 +812,21 @@ class PeopleTree {
     }
     if (parent) return [];
     const items = [];
-    const me = new vscode.TreeItem(`${core.name} (bạn)`);
+    const me = new vscode.TreeItem(t('tree.me', { name: core.name }));
     me.description = describe(core.presence, core.status);
-    me.tooltip = core.account ? `Tài khoản ${core.account.provider}:${core.account.label}` : 'Chưa dùng tài khoản VS Code — menu LAN Collab > Dùng tài khoản VS Code';
+    me.tooltip = core.account ? t('tree.account', { account: `${core.account.provider}:${core.account.label}` }) : t('tree.me.noAccount');
     me.iconPath = new vscode.ThemeIcon(core.account && core.account.provider === 'github' ? 'github' : 'account');
     items.push(me);
     for (const u of core.users.values()) {
       const item = new vscode.TreeItem(u.name);
-      item.description = describe(u.presence, u.status) || 'không mở file nào';
-      const acc = u.account ? `Tài khoản ${u.account.provider}:${u.account.label}` : 'Không dùng tài khoản VS Code';
-      item.tooltip = `${u.name}${u.id === following ? ' (đang đi theo)' : ''}\n${acc}\nBấm để nhảy tới chỗ người này đang đứng`;
+      item.description = describe(u.presence, u.status) || t('tree.member.noFile');
+      const acc = u.account ? t('tree.account', { account: `${u.account.provider}:${u.account.label}` }) : t('tree.member.noAccount');
+      item.tooltip = [u.id === following ? t('tree.member.following', { name: u.name }) : u.name, acc, t('tree.member.goTo')].join('\n');
       item.iconPath = new vscode.ThemeIcon(u.id === following ? 'eye' : u.account && u.account.provider === 'github' ? 'github' : 'person');
-      item.command = { command: 'lanCollab.goTo', title: 'Nhảy tới', arguments: [u.id] };
+      item.command = { command: 'lanCollab.goTo', title: t('tree.member.goToTitle'), arguments: [u.id] };
       items.push(item);
     }
-    const act = new vscode.TreeItem('Hoạt động gần đây', vscode.TreeItemCollapsibleState.Collapsed);
+    const act = new vscode.TreeItem(t('tree.activity'), vscode.TreeItemCollapsibleState.Collapsed);
     act.contextValue = 'activity';
     act.iconPath = new vscode.ThemeIcon('history');
     items.push(act);

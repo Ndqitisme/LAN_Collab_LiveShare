@@ -340,16 +340,16 @@ function collab(port, name, extra = {}) {
   return c;
 }
 
-test('lib/client-core.js renders the 0.1 sentences from codes and activity kinds', async () => {
+test('lib/client-core.js renders catalog sentences from codes and activity kinds', async () => {
   const bad = collab(open.port, 'cc-bad', { token: 'bad' });
   const lost = collab(open.port, 'cc-lost', { project: 'Nope' });
   await until(() => bad.fatal && lost.fatal, 'both refusals');
-  assert.deepStrictEqual(bad.fatal, { msg: 'Sai lanCollab.token.', code: 'token_invalid' });
-  assert.deepStrictEqual(lost.fatal, { msg: 'Hub này phục vụ dự án "Demo", máy đang mở "Nope".', code: 'project_unknown' });
+  assert.deepStrictEqual(bad.fatal, { msg: 'LAN Hub từ chối token của máy này. Token đã đổi hoặc mã mời đã cũ.', code: 'token_invalid' });
+  assert.deepStrictEqual(lost.fatal, { msg: `LAN Hub tại 127.0.0.1:${open.port} không có dự án "Nope". Dự án LAN Hub đang phục vụ: "Demo".`, code: 'project_unknown' });
   const denied = collab(gated.port, 'cc-mallory', { account: { provider: 'github', label: 'mallory' } });
   await until(() => denied.fatal, 'account refusal');
   assert.strictEqual(denied.fatal.code, 'account_denied');
-  assert.match(denied.fatal.msg, /^Tài khoản github:mallory chưa được phép vào\. Nhờ người quản lý hub thêm dòng "github:mallory" vào /);
+  assert.strictEqual(denied.fatal.msg, 'Tài khoản github:mallory chưa có trong danh sách tài khoản được phép. Gửi dòng github:mallory cho người quản trị LAN Hub.');
   for (const c of [bad, lost, denied]) c.disconnect();
 
   const cc = collab(open.port, 'cc-view');
@@ -359,7 +359,7 @@ test('lib/client-core.js renders the 0.1 sentences from codes and activity kinds
   raw.send({ t: 'status', text: 'review' });
   await until(() => cc.activity.some((x) => x.text === 'đặt trạng thái: review'), 'rendered status');
   const texts = cc.activity.filter((x) => x.who === 'rawpeer').map((x) => x.text);
-  assert.deepStrictEqual(texts, ['vào phòng (127.0.0.1)', 'tạo cc.txt', 'đặt trạng thái: review']);
+  assert.deepStrictEqual(texts, ['vào dự án', 'đã tạo cc.txt', 'đặt trạng thái: review']);
   assert.ok(cc.activity.every((x) => typeof x.kind === 'string'), 'the record keeps its kind');
   raw.close();
   cc.disconnect();

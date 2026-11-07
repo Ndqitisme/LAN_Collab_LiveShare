@@ -15,11 +15,18 @@
   const MAX_SIDE = 1920;
   const GROUP_MS = 5 * 60 * 1000;
 
+  let catalog = {};
+  function t(id, args) {
+    const text = catalog[id];
+    if (typeof text !== 'string') return id;
+    return args ? text.replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(args, k) ? String(args[k]) : m)) : text;
+  }
+
   const EMOJI = [
-    ['Mặt cười', '😀 😃 😄 😁 😆 😅 😂 🤣 🙂 😉 😊 😇 🥰 😍 😘 😋 😛 😜 🤪 🤗 🤔 🤨 😐 😑 😶 🙄 😏 😬 😌 😴 😷 🤒 🤯 😎 🤓 🧐 😕 😟 😮 😲 😳 🥺 😢 😭 😱 😤 😡 🤬'],
-    ['Cử chỉ', '👍 👎 👌 ✌️ 🤞 🤝 👏 🙌 🙏 💪 👋 🤙 👉 👈 👆 👇 ☝️ ✋ 🤚 🖐️ 🫡 🤷 🤦 🙋 🙆 🙅 👀 🧠'],
-    ['Làm việc', '✅ ❌ ⚠️ ❓ ❗ 💡 🔥 🚀 🎯 🐛 🔧 🛠️ ⚙️ 🔍 📌 📎 📝 📄 📁 📊 💻 🖥️ ⌨️ 🖱️ 🧪 🔒 🔑 ⏳ ⏰ 📅 ☕ 🍜'],
-    ['Biểu tượng', '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💯 ✨ ⭐ 🌟 🎉 🎊 🏆 🥇 👑 💎 🎁 🌈 ☀️ 🌙 ⚡ 💤 💬 💭 🔔 ➕ ➖ ✔️ ➡️ ⬅️ 🔁'],
+    [() => t('chat.emoji.smileys'), '😀 😃 😄 😁 😆 😅 😂 🤣 🙂 😉 😊 😇 🥰 😍 😘 😋 😛 😜 🤪 🤗 🤔 🤨 😐 😑 😶 🙄 😏 😬 😌 😴 😷 🤒 🤯 😎 🤓 🧐 😕 😟 😮 😲 😳 🥺 😢 😭 😱 😤 😡 🤬'],
+    [() => t('chat.emoji.gestures'), '👍 👎 👌 ✌️ 🤞 🤝 👏 🙌 🙏 💪 👋 🤙 👉 👈 👆 👇 ☝️ ✋ 🤚 🖐️ 🫡 🤷 🤦 🙋 🙆 🙅 👀 🧠'],
+    [() => t('chat.emoji.work'), '✅ ❌ ⚠️ ❓ ❗ 💡 🔥 🚀 🎯 🐛 🔧 🛠️ ⚙️ 🔍 📌 📎 📝 📄 📁 📊 💻 🖥️ ⌨️ 🖱️ 🧪 🔒 🔑 ⏳ ⏰ 📅 ☕ 🍜'],
+    [() => t('chat.emoji.symbols'), '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💯 ✨ ⭐ 🌟 🎉 🎊 🏆 🥇 👑 💎 🎁 🌈 ☀️ 🌙 ⚡ 💤 💬 💭 🔔 ➕ ➖ ✔️ ➡️ ⬅️ 🔁'],
   ];
 
   const saved = vscode.getState() || {};
@@ -59,13 +66,13 @@
     connected = m.connected;
     users = m.users;
     document.body.classList.toggle('offline', !connected);
-    $('stateText').textContent = !connected ? 'Chưa kết nối hub' : users.length ? users.length + ' người khác đang online' : 'Chỉ có bạn trong phòng';
+    $('stateText').textContent = !connected ? t('chat.state.offline') : users.length ? t('chat.state.online', { count: users.length }) : t('chat.state.alone');
     const faces = $('faces');
     faces.replaceChildren();
     for (const u of users.slice(0, 6)) {
       const b = document.createElement('button');
       b.className = 'face';
-      b.title = u.name + (u.status ? ' — ' + u.status : '') + '\nBấm để nhắc tên';
+      b.title = u.name + (u.status ? ' · ' + u.status : '') + '\n' + t('chat.face.mention');
       b.append(avatar(u.name, u.color));
       b.addEventListener('click', () => insert('@' + u.name + ' '));
       faces.append(b);
@@ -119,7 +126,7 @@
       } else if (ch === 'h' && (URL_RE.lastIndex = i, m = URL_RE.exec(text))) {
         flush();
         const url = m[0];
-        el.append(link(url, 'Mở ' + url + ' trong trình duyệt', () => vscode.postMessage({ type: 'openUrl', url })));
+        el.append(link(url, t('chat.link.url', { url }), () => vscode.postMessage({ type: 'openUrl', url })));
       } else if (ch === '@' && atWordStart && (MENTION_RE.lastIndex = i, m = MENTION_RE.exec(text))) {
         flush();
         const s = document.createElement('span');
@@ -130,7 +137,7 @@
         flush();
         const rel = m[1];
         const line = Number(m[2]);
-        el.append(link(m[0], 'Mở ' + m[0], () => vscode.postMessage({ type: 'open', rel, line })));
+        el.append(link(m[0], t('chat.link.ref', { ref: m[0] }), () => vscode.postMessage({ type: 'open', rel, line })));
       } else {
         plain += ch;
         i += 1;
@@ -172,11 +179,11 @@
   function imageBlock(image) {
     const box = document.createElement('button');
     box.className = 'shot loading';
-    box.title = 'Mở ảnh (' + kb(image.size) + ')';
+    box.title = t('chat.image.open', { size: kb(image.size) });
     if (image.w && image.h) box.style.aspectRatio = image.w + ' / ' + image.h;
     if (image.w) box.style.width = Math.min(image.w, 260) + 'px';
     const img = document.createElement('img');
-    img.alt = 'Ảnh';
+    img.alt = t('chat.image.alt');
     img.addEventListener('load', () => box.classList.remove('loading'));
     box.append(img);
     box.addEventListener('click', () => vscode.postMessage({ type: 'openImage', id: image.id }));
@@ -199,7 +206,7 @@
 
   // Large photos and screenshots are scaled down before sending; small images and GIFs go as they are.
   async function prepare(file) {
-    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) throw new Error('Chỉ gửi được ảnh PNG, JPEG, GIF hoặc WebP.');
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) throw new Error(t('chat.image.type'));
     const bmp = await createImageBitmap(file);
     let { width: w, height: h } = bmp;
     let blob = file;
@@ -216,7 +223,7 @@
       if (!blob || blob.size > REENCODE_OVER) blob = await toBlob('image/jpeg', 0.85);
     }
     bmp.close();
-    if (blob.size > IMAGE_MAX) throw new Error('Ảnh lớn hơn 4 MB, không gửi được.');
+    if (blob.size > IMAGE_MAX) throw new Error(t('chat.image.tooLarge'));
     const src = await readDataUrl(blob);
     return { mime: blob.type || file.type, b64: src.slice(src.indexOf(',') + 1), w, h, src, size: blob.size };
   }
@@ -225,7 +232,7 @@
     try {
       attachment = await prepare(file);
     } catch (e) {
-      notice(e && e.message ? e.message : 'Không đọc được ảnh.');
+      notice(e && e.message ? e.message : t('chat.image.unreadable'));
       return;
     }
     $('attachImg').src = attachment.src;
@@ -248,8 +255,8 @@
     const d = new Date(ts);
     const today = new Date();
     const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-    if (d.toDateString() === today.toDateString()) return 'Hôm nay';
-    if (d.toDateString() === yesterday.toDateString()) return 'Hôm qua';
+    if (d.toDateString() === today.toDateString()) return t('chat.day.today');
+    if (d.toDateString() === yesterday.toDateString()) return t('chat.day.yesterday');
     return d.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
   }
 
@@ -320,7 +327,7 @@
     if (stick) scrollDown();
     else {
       unseen += 1;
-      jump.textContent = unseen + ' tin mới ↓';
+      jump.textContent = t('chat.jump.count', { count: unseen });
       jump.classList.remove('hidden');
     }
   }
@@ -334,7 +341,7 @@
   function showEmpty() {
     const e = document.createElement('div');
     e.className = 'empty';
-    e.textContent = connected ? 'Chưa có tin nhắn nào trong phòng.' : 'Kết nối hub để xem và gửi tin nhắn.';
+    e.textContent = connected ? t('chat.empty.online') : t('chat.empty.offline');
     log.append(e);
   }
 
@@ -359,7 +366,8 @@
 
   function autosize() {
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    // border-box height: scrollHeight leaves out the border, which would show a scrollbar on every line count
+    input.style.height = Math.min(input.scrollHeight + input.offsetHeight - input.clientHeight, 160) + 'px';
   }
 
   function updateSend() {
@@ -404,7 +412,7 @@
 
   function suggest() {
     const mq = mentionQuery();
-    const all = users.map((u) => ({ name: u.name, color: u.color })).concat([{ name: 'all', note: 'cả phòng' }]);
+    const all = users.map((u) => ({ name: u.name, color: u.color })).concat([{ name: 'all', note: t('chat.suggest.all') }]);
     options = mq ? all.filter((o) => o.name.toLowerCase().includes(mq.q)).slice(0, 8) : [];
     if (!options.length) return suggestBox.classList.add('hidden');
     active = Math.min(active, options.length - 1);
@@ -499,7 +507,7 @@
   function renderEmoji() {
     const tabs = $('emojiTabs');
     tabs.replaceChildren();
-    const tabList = [[-1, 'Gần đây']].concat(EMOJI.map((t, k) => [k, t[0]]));
+    const tabList = [[-1, t('chat.emoji.recent')]].concat(EMOJI.map((group, k) => [k, group[0]()]));
     for (const [k, name] of tabList) {
       if (k === -1 && !recent.length) continue;
       const b = document.createElement('button');
@@ -545,6 +553,7 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     if (m.type === 'init') {
+      catalog = m.catalog;
       setPeople(m);
       log.replaceChildren();
       last = null;
@@ -571,7 +580,7 @@
         clearAttachment();
         changed();
       } else {
-        notice(m.reason || 'Không gửi được tin nhắn.');
+        notice(m.reason || t('chat.send.failed'));
         updateSend();
       }
     } else if (m.type === 'media') {
@@ -583,7 +592,7 @@
           box.classList.remove('loading');
           box.classList.add('missing');
           box.title = '';
-          box.textContent = 'Ảnh không còn trên hub';
+          box.textContent = t('chat.image.gone');
         }
       }
       mediaWait.delete(m.id);

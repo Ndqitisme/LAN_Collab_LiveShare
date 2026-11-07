@@ -102,7 +102,7 @@ function client(port, name, account) {
   assert.strictEqual(bob.chat.length, 3, 'ảnh bị từ chối không thành tin nhắn');
   const features = alice.hubFeatures;
   alice.hubFeatures = [];
-  assert.match(alice.sendChat('', { mime: 'image/png', b64: 'AA==' }), /Hub đang chạy bản cũ/);
+  assert.match(alice.sendChat('', { mime: 'image/png', b64: 'AA==' }), /^LAN Hub này chưa nhận ảnh\./);
   alice.hubFeatures = features;
 
   // Editing the allow-list needs no restart; a newcomer gets the history.

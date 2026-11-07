@@ -167,7 +167,7 @@ exports.run = async function run() {
     await vscode.commands.executeCommand('lanCollab.goTo', u.id);
     const active = vscode.window.activeTextEditor;
     if (!active || path.basename(active.document.uri.fsPath) !== 'a.py') problems.push('goTo không mở a.py');
-    await waitFor(() => core.activity.some((a) => a.text.includes('bắt đầu debug a.py')), 5000, 'activity debug');
+    await waitFor(() => core.activity.some((a) => a.text === 'bắt đầu debug a.py'), 5000, 'activity debug');
     const mine = await new Promise((resolve) => {
       const t = setInterval(() => {
         const me = [...peer.users.values()].find((x) => x.name !== 'peer');
