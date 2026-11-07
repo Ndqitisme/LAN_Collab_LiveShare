@@ -9,7 +9,7 @@ const { showNeedsAction } = require('./connection/actions');
 const { showDownloadProgress } = require('./connection/sync-ui');
 const { registerCommands } = require('./commands');
 const { StatusBar } = require('./status-bar');
-const { PeopleTree } = require('./views/people');
+const { SessionView } = require('./views/session');
 const { Editors } = require('./editors');
 const { Decorations } = require('./decorations');
 const { Presence } = require('./presence');
@@ -29,7 +29,7 @@ function activate(context) {
   app.decorations = new Decorations(app);
   app.presence = new Presence(app);
   app.follow = new Follow(app);
-  app.tree = new PeopleTree(app);
+  app.session = new SessionView(app);
   app.statusBar = new StatusBar(app);
   app.chatView = new ChatView({
     core: () => app.controller.core,
@@ -40,15 +40,16 @@ function activate(context) {
   });
   registerCommands(app);
 
-  const { controller, editors, decorations, presence, tree, statusBar, chatView } = app;
+  const { controller, editors, decorations, presence, session, statusBar, chatView } = app;
   context.subscriptions.push(
     out,
     statusBar.item,
-    vscode.window.createTreeView('lanCollab.people', { treeDataProvider: tree }),
+    vscode.window.registerWebviewViewProvider('lanCollab.session', session, { webviewOptions: { retainContextWhenHidden: true } }),
+    session,
     vscode.window.registerWebviewViewProvider('lanCollab.chat', chatView, { webviewOptions: { retainContextWhenHidden: true } }),
     controller.onDidChange(({ prev, state }) => {
       statusBar.render();
-      tree.refresh();
+      session.refresh();
       if (state.name === 'needs_action' && prev.name !== 'needs_action') showNeedsAction(app, state);
     }),
     controller.onDidChangeCore((core) => (core ? wireCore(core) : coreGone())),
@@ -73,11 +74,11 @@ function activate(context) {
   statusBar.render();
   const first = config.workspaceFolder();
   if (vscode.workspace.getConfiguration('lanCollab').get('autoConnect') && first && config.connectionFor(context, first)) controller.connect();
-  return { core: () => app.controller.core };
+  return { core: () => app.controller.core, session: () => app.session.snapshot() };
 }
 
 function wireCore(core) {
-  const { editors, decorations, presence, follow, tree, statusBar, chatView, log } = app;
+  const { editors, decorations, presence, follow, session, statusBar, chatView, log } = app;
   core.on('chat', (msg) => chatView.onMessage(msg));
   core.on('chat-rejected', (reason) => chatView.onRejected(reason));
   core.on('ready', () => {
@@ -86,26 +87,25 @@ function wireCore(core) {
     editors.bindAll();
     presence.schedule();
     decorations.schedule();
-    tree.refresh();
   });
   core.on('entry', (rel) => editors.bindRel(rel));
   core.on('unbind', (rel) => editors.unbindRel(rel));
   core.on('users', () => {
     decorations.prune(core.users);
     follow.onUsers(core.users);
-    tree.refresh();
+    session.update();
     statusBar.render();
     decorations.schedule();
     chatView.updatePeople();
   });
   core.on('presence', (id) => {
-    tree.refresh();
+    session.update();
     decorations.schedule();
     if (id === follow.following) follow.followNow();
   });
   core.on('activity', (a) => {
     log(`${a.who} ${a.text}`);
-    tree.refresh();
+    session.onActivity(a);
   });
   core.on('backup', (dir) => {
     vscode.window.showWarningMessage(t('sync.backup', { dir }));
@@ -116,7 +116,7 @@ function coreGone() {
   app.editors.disposeAll();
   app.decorations.disposeAll();
   app.follow.following = null;
-  app.tree.refresh();
+  app.session.refresh();
   app.chatView.refresh();
 }
 

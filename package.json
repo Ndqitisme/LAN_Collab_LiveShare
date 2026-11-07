@@ -119,7 +119,8 @@
     "views": {
       "lanCollab": [
         {
-          "id": "lanCollab.people",
+          "type": "webview",
+          "id": "lanCollab.session",
           "name": "Thành viên"
         },
         {

@@ -40,7 +40,7 @@ class Presence {
       p.debug = rel || ds.name;
     }
     core.sendPresence(p);
-    this.app.tree.refresh();
+    this.app.session.update();
   }
 }
 

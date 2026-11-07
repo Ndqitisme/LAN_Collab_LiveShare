@@ -164,10 +164,15 @@ exports.run = async function run() {
     peer.setStatus('đang làm PD1');
     await waitFor(() => [...core.users.values()].some((u) => u.presence && u.presence.file === 'a.py' && u.status === 'đang làm PD1'), 5000, 'presence của peer');
     const u = [...core.users.values()].find((x) => x.name === 'peer');
+    const view = api.session();
+    const row = view.members.find((m) => m.id === u.id);
+    if (view.connection.name !== 'live' || !view.me || view.me.name !== core.name) problems.push(`view Thành viên không hiện máy này: ${JSON.stringify(view.me)}`);
+    if (!row || row.file !== 'a.py' || row.line !== 1 || row.debug !== 'a.py' || row.status !== 'đang làm PD1') problems.push(`view Thành viên thiếu vị trí của peer: ${JSON.stringify(row)}`);
     await vscode.commands.executeCommand('lanCollab.goTo', u.id);
     const active = vscode.window.activeTextEditor;
     if (!active || path.basename(active.document.uri.fsPath) !== 'a.py') problems.push('goTo không mở a.py');
     await waitFor(() => core.activity.some((a) => a.text === 'bắt đầu debug a.py'), 5000, 'activity debug');
+    if (!core.activity.some((a) => a.kind === 'debug_start' && a.detail === 'a.py')) problems.push('activity debug_start không giữ debug target cho view Thành viên');
     const mine = await new Promise((resolve) => {
       const t = setInterval(() => {
         const me = [...peer.users.values()].find((x) => x.name !== 'peer');

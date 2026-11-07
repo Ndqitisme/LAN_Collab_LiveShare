@@ -3,7 +3,15 @@
 const vscode = require('vscode');
 const path = require('path');
 const { t } = require('../../lib/i18n');
-const { describe } = require('./views/people');
+
+// A member's place for the quick pick: file and line, debug target, status text.
+function describe(p, status) {
+  const parts = [];
+  if (p && p.file) parts.push(`${p.file}:${p.line}`);
+  if (p && p.debug) parts.push(t('follow.debugging', { target: p.debug }));
+  if (status) parts.push(`“${status}”`);
+  return parts.join(' · ');
+}
 
 // Following a member, jumping to a member, and the file references chat inserts and opens.
 class Follow {
@@ -15,6 +23,7 @@ class Follow {
   set(id) {
     this.following = id;
     this.app.statusBar.render();
+    this.app.session.update();
     if (id) this.followNow();
   }
 
