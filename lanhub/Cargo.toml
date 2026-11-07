@@ -5,9 +5,8 @@ members = [
     "crates/lanhub-protocol",
     "crates/lanhub-core",
     "crates/lanhub-cli",
+    "app/src-tauri",
 ]
-# The Tauri app joins the workspace in A7.
-exclude = ["app"]
 
 [workspace.package]
 version = "0.2.0"

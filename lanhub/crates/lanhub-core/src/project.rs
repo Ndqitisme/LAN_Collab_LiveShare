@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lanhub_ot::{Component, TextOperation, diff};
@@ -297,6 +297,17 @@ pub struct Project {
     changed_due: HashSet<String>,
     /// Text files whose text the history thread holds (`history` module docs).
     mirrored: HashSet<String>,
+    stats: Arc<ProjectStats>,
+}
+
+/// Counters the actor keeps current for a live status view, read without a round trip to the actor.
+#[derive(Debug, Default)]
+pub struct ProjectStats {
+    pub files: AtomicUsize,
+    /// Operations applied since the project started.
+    pub ops: AtomicU64,
+    /// Milliseconds since the epoch of the last applied operation or member activity; 0 for none yet.
+    pub last_activity: AtomicU64,
 }
 
 pub struct LoadedFile {
@@ -342,6 +353,8 @@ impl Project {
             }
             None => (None, None),
         };
+        let stats = Arc::new(ProjectStats::default());
+        stats.files.store(files.len(), Ordering::Relaxed);
         Project {
             runs: Runs::new(info.history.idle_ms()),
             changed_sent: HashMap::new(),
@@ -371,12 +384,17 @@ impl Project {
                 DebugHooks::default()
             },
             member_count: Arc::default(),
+            stats,
         }
     }
 
     /// The number of members, kept current by the actor.
     pub fn member_count(&self) -> Arc<AtomicUsize> {
         self.member_count.clone()
+    }
+
+    pub fn stats(&self) -> Arc<ProjectStats> {
+        self.stats.clone()
     }
 
     pub async fn run(mut self, mut inbox: mpsc::Receiver<ActorMsg>) {
@@ -505,6 +523,7 @@ impl Project {
                 self.recover(&what, key, path.as_deref());
             }
         }
+        self.stats.files.store(self.files.len(), Ordering::Relaxed);
         self.close_slow();
     }
 
@@ -664,6 +683,7 @@ impl Project {
             addr,
         };
         log(format!("{} {}", a.who.to_utf8_lossy(), kind.sentence(&a)));
+        self.stats.last_activity.store(a.ts, Ordering::Relaxed);
         self.activity.push_back(a.clone());
         while self.activity.len() > ACTIVITY_KEEP {
             self.activity.pop_front();
@@ -977,6 +997,8 @@ impl Project {
             f.log_start += drop as u64;
         }
         let new_rev = f.rev;
+        self.stats.ops.fetch_add(1, Ordering::Relaxed);
+        self.stats.last_activity.store(now_ms(), Ordering::Relaxed);
         let Some(m) = self.member(key) else {
             return Some(new_rev);
         };

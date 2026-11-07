@@ -1,0 +1,12 @@
+{
+  "name": "lanhub-app",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Tauri CLI for the LAN Hub desktop app. The UI lives in ui/, the Rust side in src-tauri/.",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}
