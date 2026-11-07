@@ -278,11 +278,12 @@ impl ConfigFile {
             return Err(range_error("maxMb", MAX_MB.start(), MAX_MB.end()));
         }
         self.edit_project(name, |t| {
-            if !t.get("history").is_some_and(Item::is_table) {
+            // `[project.history]` or an inline `history = { .. }`: either way its other keys stay.
+            if !t.get("history").is_some_and(Item::is_table_like) {
                 t.insert("history", Item::Table(Table::new()));
             }
             let history = t["history"]
-                .as_table_mut()
+                .as_table_like_mut()
                 .expect("a table was just put here");
             history.insert("idle_minutes", value(i64::from(h.idle_minutes)));
             history.insert("keep_days", value(i64::from(h.keep_days)));
@@ -314,11 +315,13 @@ impl ConfigFile {
             };
             let (name, root) =
                 validate(&cfg, &input, None).map_err(|e| e.param("project", name))?;
+            // Kept as the 0.1 file had them, even entries the editor would mark: dropping one could turn a
+            // closed project into one any token holder joins.
             let allow: Vec<String> = item
                 .allow
                 .iter()
                 .map(|a| a.trim().to_owned())
-                .filter(|a| allow_entry_ok(a))
+                .filter(|a| !a.is_empty())
                 .collect();
             let mut t = Table::new();
             t.insert("name", value(&name));

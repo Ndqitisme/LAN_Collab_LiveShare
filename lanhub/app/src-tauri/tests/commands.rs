@@ -500,3 +500,47 @@ async fn importing_a_legacy_folder_twice_adds_the_projects_once() {
     );
     core.shutdown().await;
 }
+
+#[tokio::test]
+async fn history_limits_keep_an_inline_history_table() {
+    use lanhub_app::config_file::HistoryInput;
+    let s = Scratch::new();
+    let web = s.folder("web");
+    let text = format!(
+        "{HEADER}\n[[project]]\nname = \"web\"\nroot = '{web}'\ntoken = \"abc\"\nhistory = {{ enabled = false, keep_days = 9 }}\n"
+    );
+    let core = started(&s.config(), &text).await;
+    let h = HistoryInput {
+        idle_minutes: 5,
+        keep_days: 7,
+        max_mb: 100,
+    };
+    core.set_history("web", &h).await.unwrap();
+    let settings = core.project_settings("web").unwrap();
+    assert!(!settings.history_enabled, "{}", s.text());
+    assert_eq!(settings.history, h);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn importing_keeps_legacy_allow_entries_the_editor_would_refuse() {
+    use lanhub_app::config_file::ImportInput;
+    let s = Scratch::new();
+    let root = s.folder("p");
+    let core = started(&s.config(), HEADER).await;
+    core.import_legacy(&[ImportInput {
+        name: "p".into(),
+        root,
+        token: "abc".into(),
+        allow: vec!["github: alice".into()],
+    }])
+    .await
+    .unwrap();
+    assert_eq!(
+        core.project_settings("p").unwrap().allow,
+        ["github: alice"],
+        "{}",
+        s.text()
+    );
+    core.shutdown().await;
+}
