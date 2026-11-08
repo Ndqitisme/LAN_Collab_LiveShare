@@ -16,6 +16,9 @@ const { Editors } = require('./editors');
 const { Decorations } = require('./decorations');
 const { Presence } = require('./presence');
 const { Follow } = require('./follow');
+const { HistoryView } = require('./views/history');
+const { registerHistory } = require('./history/commands');
+const { HistoryClient } = require('../../lib/history-client');
 
 let app = null;
 
@@ -35,6 +38,8 @@ function activate(context) {
   app.session = new SessionView(app);
   app.statusBar = new StatusBar(app);
   app.connectionPanel = new ConnectionPanel(app);
+  app.history = null;
+  app.historyView = new HistoryView(app);
   app.chatView = new ChatView({
     core: () => app.controller.core,
     extensionUri: context.extensionUri,
@@ -43,8 +48,9 @@ function activate(context) {
     onUnread: (n) => app.statusBar.setUnread(n),
   });
   registerCommands(app);
+  registerHistory(app);
 
-  const { controller, editors, decorations, presence, session, statusBar, chatView } = app;
+  const { controller, editors, decorations, presence, session, statusBar, chatView, historyView } = app;
   context.subscriptions.push(
     out,
     app.sync,
@@ -52,9 +58,11 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider('lanCollab.session', session, { webviewOptions: { retainContextWhenHidden: true } }),
     session,
     vscode.window.registerWebviewViewProvider('lanCollab.chat', chatView, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.window.registerWebviewViewProvider('lanCollab.history', historyView, { webviewOptions: { retainContextWhenHidden: true } }),
     controller.onDidChange(({ prev, state }) => {
       statusBar.render();
       session.refresh();
+      historyView.update();
       // The open connection panel already shows the reason and its actions.
       if (state.name === 'needs_action' && prev.name !== 'needs_action' && !app.connectionPanel.visible) showNeedsAction(app, state);
     }),
@@ -72,6 +80,8 @@ function activate(context) {
       decorations.schedule();
     }),
     vscode.window.onDidChangeVisibleTextEditors(() => decorations.schedule()),
+    vscode.window.tabGroups.onDidChangeTabs(() => historyView.onTabs()),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => historyView.onTabs()),
     vscode.debug.onDidStartDebugSession(() => presence.schedule()),
     vscode.debug.onDidTerminateDebugSession(() => presence.schedule()),
     vscode.debug.onDidChangeActiveDebugSession(() => presence.schedule()),
@@ -87,7 +97,9 @@ function activate(context) {
 }
 
 function wireCore(core) {
-  const { editors, decorations, presence, follow, session, statusBar, chatView, log } = app;
+  const { editors, decorations, presence, follow, session, statusBar, chatView, historyView, log } = app;
+  app.history = new HistoryClient(core);
+  app.history.on('changed', (rel) => historyView.onChanged(rel));
   core.on('chat', (msg) => chatView.onMessage(msg));
   core.on('chat-rejected', (reason) => chatView.onRejected(reason));
   core.on('ready', () => {
@@ -96,6 +108,7 @@ function wireCore(core) {
     editors.bindAll();
     presence.schedule();
     decorations.schedule();
+    historyView.update();
   });
   core.on('entry', (rel) => editors.bindRel(rel));
   core.on('unbind', (rel) => editors.unbindRel(rel));
@@ -122,6 +135,9 @@ function wireCore(core) {
 }
 
 function coreGone() {
+  if (app.history) app.history.dispose();
+  app.history = null;
+  app.historyView.update();
   app.editors.disposeAll();
   app.decorations.disposeAll();
   app.follow.following = null;
