@@ -58,6 +58,14 @@ pre {
 }
 
 /*
+  VS Code webviews set scrollbar-color on html (in its vscode-default layer), and Chromium then draws its
+  standard scrollbar with arrow buttons instead of the rules below; auto hands the scrollbar back to them.
+*/
+html {
+  scrollbar-color: auto;
+}
+
+/*
   The track is 12px wide; a 2px transparent border keeps the visible thumb at
   8px until the pointer is on it. Setting scrollbar-width or scrollbar-color
   would make Chromium ignore these rules, so neither is set here.

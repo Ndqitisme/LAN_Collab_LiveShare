@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="70" y="90" width="260" height="120" rx="14" stroke="var(--vscode-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M70 130h260" stroke="var(--vscode-foreground)" stroke-width="2" stroke-opacity="0.35"/>
+  <circle cx="110" cy="110" r="7" fill="var(--vscode-textLink-foreground)"/>
+  <text x="96" y="178" font-family="var(--vscode-editor-font-family), monospace" font-size="26" fill="var(--vscode-foreground)">LC3-eyJ2IjozLC…</text>
+  <circle cx="300" cy="230" r="34" stroke="var(--vscode-textLink-foreground)" stroke-width="5" fill="var(--vscode-editor-background)"/>
+  <circle cx="300" cy="230" r="10" stroke="var(--vscode-textLink-foreground)" stroke-width="5"/>
+  <path d="M276 254l-40 40M248 282l12 12M262 268l10 10" stroke="var(--vscode-textLink-foreground)" stroke-width="5"/>
+</svg>
