@@ -96,7 +96,6 @@ export interface InviteCodes {
   hosts: string[];
   port: number;
   tls: boolean;
-  legacy: { host: string; code: string }[];
 }
 
 export interface ClientInfo {

@@ -249,15 +249,6 @@ async fn admin_invite_codes_hold_public_addresses_first_and_every_ipv4() {
     );
     assert!(j.get("f").is_none());
 
-    assert_eq!(codes.legacy.len(), ips.len());
-    for (l, ip) in codes.legacy.iter().zip(&ips) {
-        assert_eq!(&l.host, ip);
-        let host: std::net::Ipv4Addr = ip.parse().unwrap();
-        assert_eq!(
-            l.code,
-            lanhub_core::invite::encode_v1(host, hub.port(), "Dự án", "5f0c9e")
-        );
-    }
     assert!(hub.admin().invite_codes("nope").await.is_err());
     hub.stop().await;
 }

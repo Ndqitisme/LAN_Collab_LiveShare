@@ -385,10 +385,6 @@
     "public": "Địa chỉ công khai",
     "lan": "Mạng LAN",
     "tls": "TLS",
-    "legacyTitle": "Mã mời cho LAN Collab 0.1",
-    "legacyText": "Mỗi mã chỉ chứa một địa chỉ. Dùng cho máy còn chạy LAN Collab 0.1.1.",
-    "legacyTls": "LAN Collab 0.1 không kết nối được khi LAN Hub bật TLS.",
-    "copyLegacy": "Sao chép mã mời cho {host}",
     "paused": "Dự án đang tạm dừng. Mã mời có hiệu lực khi dự án chạy.",
     "noAddressText": "Kết nối máy này vào mạng LAN để tạo mã mời."
   },

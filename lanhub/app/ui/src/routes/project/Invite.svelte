@@ -101,21 +101,6 @@
     </div>
   </Card>
 
-  <Card title={t('invite.legacyTitle')} description={t('invite.legacyText')}>
-    {#if codes.tls}
-      <p class="muted">{t('invite.legacyTls')}</p>
-    {:else}
-      <ul class="legacy" data-testid="invite-legacy">
-        {#each codes.legacy as l (l.host)}
-          <li>
-            <span class="host">{l.host}</span>
-            <code class="legacy-code selectable" title={l.code}>{l.code}</code>
-            <IconButton icon="copy" label={t('invite.copyLegacy', { host: l.host })} onclick={() => copy(l.code)} />
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </Card>
 {/if}
 
 <style>
@@ -244,34 +229,6 @@
     color: var(--lc-muted);
   }
 
-  .legacy {
-    display: flex;
-    flex-direction: column;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .legacy li {
-    display: grid;
-    grid-template-columns: 120px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--lc-space-3);
-    min-height: 40px;
-  }
-
-  .legacy li + li {
-    border-top: var(--lc-border-width) solid var(--lc-border);
-  }
-
-  .legacy-code {
-    font-family: var(--lc-font-mono);
-    font-size: var(--lc-text-sm);
-    color: var(--lc-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 
   @media (max-width: 760px) {
     .main {

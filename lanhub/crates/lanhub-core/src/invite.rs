@@ -1,7 +1,4 @@
-//! Invite codes (docs/protocol.md section 11), encoded byte for byte as `encodeInvite` and `encodeInviteV3`
-//! in `lib/common.js`.
-
-use std::net::Ipv4Addr;
+//! Invite codes (docs/protocol.md section 11), encoded byte for byte as `encodeInviteV3` in `lib/common.js`.
 
 use lanhub_protocol::json::write_js_string;
 
@@ -25,39 +22,6 @@ fn js_string(s: &str) -> String {
     let mut out = String::new();
     write_js_string(&s.encode_utf16().collect::<Vec<u16>>(), &mut out);
     out
-}
-
-fn is_lower_hex_bytes(token: &str) -> bool {
-    token.len().is_multiple_of(2)
-        && token
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// A legacy `LC-` code for one IPv4 address: the binary version 1 when the token is lowercase hex of at
-/// most 255 bytes, else version 2 (JSON).
-pub fn encode_v1(host: Ipv4Addr, port: u16, project: &str, token: &str) -> String {
-    let mut buf = Vec::new();
-    if is_lower_hex_bytes(token) && token.len() <= 510 {
-        buf.push(1);
-        buf.extend_from_slice(&host.octets());
-        buf.extend_from_slice(&port.to_be_bytes());
-        buf.push((token.len() / 2) as u8);
-        for i in (0..token.len()).step_by(2) {
-            buf.push(u8::from_str_radix(&token[i..i + 2], 16).expect("checked hex"));
-        }
-        buf.extend_from_slice(project.as_bytes());
-    } else {
-        buf.push(2);
-        let j = format!(
-            "{{\"h\":{},\"p\":{port},\"n\":{},\"t\":{}}}",
-            js_string(&host.to_string()),
-            js_string(project),
-            js_string(token)
-        );
-        buf.extend_from_slice(j.as_bytes());
-    }
-    format!("LC-{}", base64url(&buf))
 }
 
 /// An `LC3-` code carrying every address of the hub and, with TLS on, the certificate fingerprint.
@@ -86,23 +50,6 @@ pub fn encode_v3(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn v1_matches_lib_common() {
-        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
-        assert_eq!(
-            encode_v1(ip("192.168.1.10"), 8200, "Dự án", "5f0c9e"),
-            "LC-AcCoAQogCANfDJ5E4buxIMOhbg"
-        );
-        assert_eq!(
-            encode_v1(ip("10.0.0.5"), 65535, "Demo", ""),
-            "LC-AQoAAAX__wBEZW1v"
-        );
-        assert_eq!(
-            encode_v1(ip("10.0.0.5"), 8200, "Demo \"x\"\n", "Secret"),
-            "LC-AnsiaCI6IjEwLjAuMC41IiwicCI6ODIwMCwibiI6IkRlbW8gXCJ4XCJcbiIsInQiOiJTZWNyZXQifQ"
-        );
-    }
 
     #[test]
     fn v3_matches_the_protocol_example() {

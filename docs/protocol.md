@@ -321,7 +321,7 @@ Example: `{"v":3,"i":"0b6f2c7e-6f0e-4c3a-9a51-2f1d8e7c4b10","a":["192.168.1.10",
 
 ### 11.2 Versions 1 and 2 (`LC-`, legacy)
 
-`LC-` codes hold one address and come from hub 0.1, which speaks protocol 1 only. The extension does not decode them: a pasted `LC-` code gets the catalog message `invite.legacy` and changes nothing. With TLS off, lanhub still logs one `Mã mời (<ip>): LC-...` line per address and the app lists them for machines on extension 0.1.1, which then get the legacy message of section 14.1.
+`LC-` codes hold one address and come from hub 0.1, which speaks protocol 1 only. The extension does not decode them: a pasted `LC-` code gets the catalog message `invite.legacy` and changes nothing.
 
 ## 12. History
 
@@ -479,7 +479,7 @@ The hub logs every refusal with the address, and the block with its length.
 | `update_hub` | `{input}` | the new `hub_settings` value; `input` has the fields of that value without `hostname` and `fingerprint` |
 | `all_invite_codes` | `{}` | `[{name, code}]` for the running projects |
 | `invite_code` | `{name}` | the `LC3-` code of one project (section 11.1); the addresses are the hub's `public_address` values, then its own IPv4 addresses |
-| `invite_codes` | `{name}` | `{code, hosts, port, tls, legacy}`: `code` is the `invite_code` value or `null` when the hub knows no address, `hosts` the addresses inside it in order, `legacy` one `{host, code}` `LC-` code per IPv4 address for 0.1 clients (empty with TLS on) |
+| `invite_codes` | `{name}` | `{code, hosts, port, tls}`: `code` is the `invite_code` value or `null` when the hub knows no address, `hosts` the addresses inside it in order |
 | `project_settings` | `{name}` | `{token, allow, allowFile, exclude, defaultExclude, historyEnabled, history: {idleMinutes, keepDays, maxMb}}` as the hub runs the project |
 | `set_allow` | `{name, lines}` | `null`; one allow entry per line, blank lines dropped, an empty list removes `allow`. A bad line fails with `allowInvalid {line}`, field `allow` |
 | `set_exclude` | `{name, lines}` | `null`; the extra exclude patterns, as `set_allow`; `excludeInvalid {line}`, field `exclude` |

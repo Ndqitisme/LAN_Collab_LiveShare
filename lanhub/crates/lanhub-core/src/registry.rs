@@ -95,14 +95,6 @@ pub struct InviteCodes {
     pub hosts: Vec<String>,
     pub port: u16,
     pub tls: bool,
-    /// One `LC-` code per IPv4 address, for 0.1 clients; empty with TLS on.
-    pub legacy: Vec<LegacyInvite>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LegacyInvite {
-    pub host: String,
-    pub code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,23 +429,12 @@ impl Registry {
         Ok(())
     }
 
-    /// The codes members join `cfg` with: one legacy `LC-` code per address for 0.1.1 extensions, then one
-    /// `LC3-` code with the public addresses first and every interface address after them. The legacy codes
-    /// are left out with TLS on, which 0.1 clients cannot speak. A machine with no address has no `LC3-` code.
+    /// The `LC3-` code members join `cfg` with: the public addresses first, then every interface address.
+    /// A machine with no address has no code.
     fn invite_set(&self, st: &State, cfg: &ProjectConfig) -> InviteCodes {
         let port = self.port();
         let ips = util::ipv4_addresses();
         let identity = tls_identity(st);
-        let legacy = if identity.is_none() {
-            ips.iter()
-                .map(|ip| LegacyInvite {
-                    host: ip.to_string(),
-                    code: invite::encode_v1(*ip, port, &cfg.name, &cfg.token),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         let mut hosts = st.public_address.clone();
         for ip in &ips {
             let ip = ip.to_string();
@@ -476,16 +457,11 @@ impl Registry {
             hosts,
             port,
             tls: identity.is_some(),
-            legacy,
         }
     }
 
-    /// The invite lines of the Node hub.
     fn log_invites(&self, st: &State, cfg: &ProjectConfig) {
         let codes = self.invite_set(st, cfg);
-        for l in &codes.legacy {
-            log_in(Some(&cfg.name), &format!("Mã mời ({}): {}", l.host, l.code));
-        }
         if let Some(code) = &codes.code {
             log_in(Some(&cfg.name), &format!("Mã mời: {code}"));
         }
