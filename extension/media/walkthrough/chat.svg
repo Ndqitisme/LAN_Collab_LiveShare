@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M60 60h190a16 16 0 0 1 16 16v80a16 16 0 0 1-16 16H120l-36 30v-30H60a16 16 0 0 1-16-16V76a16 16 0 0 1 16-16z" stroke="var(--vscode-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M76 100h150M76 130h100" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+  <path d="M340 140H180a16 16 0 0 0-16 16v66a16 16 0 0 0 16 16h110l34 28v-28h16a16 16 0 0 0 16-16v-66a16 16 0 0 0-16-16z" stroke="var(--vscode-textLink-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M184 176h130M184 204h80" stroke="var(--vscode-textLink-foreground)" stroke-width="5"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="80" y="40" width="240" height="220" rx="14" stroke="var(--vscode-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M122 70v170" stroke="var(--vscode-foreground)" stroke-width="3" stroke-opacity="0.4"/>
+  <circle cx="122" cy="90" r="12" stroke="var(--vscode-textLink-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M150 84h120M150 100h70" stroke="var(--vscode-textLink-foreground)" stroke-width="5"/>
+  <circle cx="122" cy="150" r="12" stroke="var(--vscode-editorWarning-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M150 144h100M150 160h80" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+  <circle cx="122" cy="210" r="12" stroke="var(--vscode-textLink-foreground)" stroke-width="4" fill="var(--vscode-editorWidget-background)"/>
+  <path d="M150 204h130M150 220h60" stroke="var(--vscode-foreground)" stroke-width="5" stroke-opacity="0.6"/>
+</svg>

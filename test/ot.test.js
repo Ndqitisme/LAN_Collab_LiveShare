@@ -3,7 +3,7 @@
 // Property tests for the OT core: transform must converge, compose must equal sequential apply.
 const assert = require('assert');
 const { TextOperation, diff, fromChanges, withPrefix, stripPrefix } = require('../lib/ot');
-const { encodeInviteV3, decodeInviteV3, decodeInvite } = require('../lib/common');
+const { encodeInviteV3, decodeInviteV3 } = require('../lib/common');
 
 function rng(seed) {
   let s = seed >>> 0;
@@ -114,7 +114,10 @@ for (const bad of [{ v: 2 }, { a: [] }, { a: '10.0.0.1' }, { p: 0 }, { p: 70000 
 for (const bad of ['', 'LC-AQoAAAEAAQAAWA', 'LC3-', 'LC3-!!!', `LC3-${Buffer.from('not json').toString('base64url')}`]) {
   assert.strictEqual(decodeInviteV3(bad), null, bad);
 }
-assert.strictEqual(decodeInvite(encodeInviteV3({ ...good, instanceId: 'id', hosts: ['10.0.0.1'], project: 'P' })), null, 'v1/v2 decoder ignores v3');
-checks += 17;
+// LC- codes (versions 1 and 2) point at a protocol 1 hub: the extension reads none of them and shows invite.legacy.
+for (const legacy of ['LC-AcCoAQogCANfDJ5E4buxIMOhbg', 'LC-AnsiaCI6IjEwLjAuMC41IiwicCI6ODIwMCwibiI6IkRlbW8gXCJ4XCJcbiIsInQiOiJTZWNyZXQifQ']) {
+  assert.strictEqual(decodeInviteV3(legacy), null, legacy);
+}
+checks += 18;
 
 console.log(`ot.test.js: ${checks} kiểm tra OK`);

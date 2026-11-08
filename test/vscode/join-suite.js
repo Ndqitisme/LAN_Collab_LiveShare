@@ -45,7 +45,7 @@ exports.run = async function run() {
     if (got.includes(rel) && !fs.readFileSync(path.join(hubRoot, rel)).equals(fs.readFileSync(path.join(folder, rel)))) problems.push(`${rel}: nội dung khác hub`);
   }
 
-  // Bad codes are refused before anything happens.
+  // An LC- code from a 0.1 hub is refused (invite.legacy) before anything happens.
   const before = listFiles(folder).length;
   await vscode.commands.executeCommand('lanCollab.disconnect');
   await vscode.commands.executeCommand('lanCollab.join', 'LC-AQoAAAEAAQAAWA');

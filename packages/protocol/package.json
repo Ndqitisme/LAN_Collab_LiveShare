@@ -1,0 +1,17 @@
+{
+  "name": "@lan-collab/protocol",
+  "version": "0.2.0",
+  "private": true,
+  "description": "TypeScript types of LAN Collab protocol 2, generated from lanhub-protocol by ts-rs (cargo test -p lanhub-protocol).",
+  "license": "MIT",
+  "type": "module",
+  "types": "./src/generated/Message.ts",
+  "exports": {
+    ".": {
+      "types": "./src/generated/Message.ts"
+    },
+    "./*": {
+      "types": "./src/generated/*.ts"
+    }
+  }
+}

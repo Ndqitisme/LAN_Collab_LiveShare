@@ -90,6 +90,7 @@ test('--no-discovery binds no UDP port', async () => {
 
 test('a taken discovery port logs a warning and the TCP hub keeps serving', async () => {
   const holder = await bindUdp(0);
+  holder.unref(); // if startHubProcess throws, the open socket must not keep the test process alive forever
   const udp = holder.address().port;
   const hub = await startHubProcess({ root: tmp('busy'), project: 'Demo', discoveryPort: udp });
   try {

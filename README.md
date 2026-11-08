@@ -4,22 +4,27 @@
 
 Tiếng Việt | [English](README.en.md)
 
-LAN Collab là extension VS Code và hub đồng bộ chạy trong mạng nội bộ, cho phép nhiều người cùng sửa một dự án theo thời gian thực. Khác với các giải pháp chia sẻ phiên làm việc, mỗi máy giữ bản sao thật của toàn bộ file dự án. Vì vậy mỗi người có thể tự chạy chương trình, dùng debugger và dùng công cụ AI của riêng mình, trong khi các thay đổi vẫn được đồng bộ ngay giữa mọi máy.
+LAN Collab cho nhiều thành viên cùng sửa một dự án trong VS Code theo thời gian thực, qua mạng nội bộ. Mỗi máy giữ bản sao thật của mọi file trong dự án, nên mỗi thành viên tự chạy chương trình, dùng debugger và công cụ AI trên máy mình, trong khi thay đổi vẫn đồng bộ ngay tới các máy khác.
 
-Hub là một tiến trình Node.js không phụ thuộc thư viện ngoài. Hub chạy trên máy chủ của bạn (Windows hoặc Linux/macOS) và không cần Internet hay dịch vụ bên thứ ba.
+LAN Collab gồm hai phần:
+
+- **LAN Hub** là máy chủ đồng bộ. Ứng dụng LAN Hub chạy trên một máy Windows trong mạng LAN và phục vụ nhiều dự án trên một cổng. Bản headless `lanhub-cli` chạy cùng cấu hình trên Windows hoặc Linux, kể cả trên máy chủ ngoài.
+- **Extension LAN Collab** cho VS Code. Thành viên dán mã mời là tham gia dự án. Extension tự chẩn đoán khi không kết nối được và giữ lịch sử lượt chỉnh sửa của từng thành viên.
+
+LAN Hub không cần Internet hay dịch vụ bên thứ ba.
 
 ## Mục lục
 
 - [Tính năng](#tính-năng)
-- [So sánh với các giải pháp khác](#so-sánh-với-các-giải-pháp-khác)
-- [Kiến trúc](#kiến-trúc)
 - [Yêu cầu](#yêu-cầu)
-- [Cài đặt hub](#cài-đặt-hub)
-- [Cài đặt extension](#cài-đặt-extension)
-- [Đóng gói bản phát hành](#đóng-gói-bản-phát-hành)
-- [Tham gia dự án](#tham-gia-dự-án)
-- [Sử dụng](#sử-dụng)
-- [Tham chiếu cấu hình](#tham-chiếu-cấu-hình)
+- [Cài ứng dụng LAN Hub](#cài-ứng-dụng-lan-hub)
+- [Chạy LAN Hub không giao diện](#chạy-lan-hub-không-giao-diện)
+- [Cài extension](#cài-extension)
+- [Tham gia dự án bằng mã mời](#tham-gia-dự-án-bằng-mã-mời)
+- [Đọc chẩn đoán kết nối](#đọc-chẩn-đoán-kết-nối)
+- [Dùng lịch sử lượt chỉnh sửa](#dùng-lịch-sử-lượt-chỉnh-sửa)
+- [Chat](#chat)
+- [Lệnh và cài đặt của extension](#lệnh-và-cài-đặt-của-extension)
 - [Làm việc với Git](#làm-việc-với-git)
 - [Cơ chế đồng bộ](#cơ-chế-đồng-bộ)
 - [Bảo mật](#bảo-mật)
@@ -30,391 +35,391 @@ Hub là một tiến trình Node.js không phụ thuộc thư viện ngoài. Hub
 
 ## Tính năng
 
-- **Sửa đồng thời theo thời gian thực.** Mỗi thao tác gõ được truyền tới các máy khác ngay lập tức. Nhiều người sửa cùng một file vẫn hội tụ về cùng một nội dung, nhờ thuật toán Operational Transformation (OT).
-- **File thật trên mọi máy.** Mỗi máy có thể tự chạy, debug và dùng công cụ AI riêng. Thay đổi do AI, script hay công cụ bên ngoài ghi thẳng xuống ổ đĩa cũng được phát hiện, gộp với phần đang sửa dở, rồi đồng bộ đi.
-- **Nhận biết hoạt động của nhóm:**
-  - con trỏ và vùng chọn của từng người, mỗi người một màu, kèm tên;
-  - danh sách thành viên, cho biết file và dòng mỗi người đang đứng, phiên debug đang chạy, trạng thái tự ghi;
-  - nhật ký hoạt động: vào hoặc rời phòng, sửa, tạo, xoá file, bắt đầu hoặc kết thúc debug;
-  - chế độ đi theo màn hình của một thành viên.
-- **Chat tích hợp:**
-  - nhắc tên bằng `@tên`, có thông báo cho người được nhắc;
-  - tham chiếu `file:dòng` có thể bấm để mở file, liên kết web mở bằng trình duyệt;
-  - gửi ảnh (dán bằng Ctrl+V hoặc chọn file), bảng chọn emoji, định dạng `code` và khối ```code```;
-  - đếm tin chưa đọc;
-  - lịch sử chat lưu trên hub.
-- **Định danh bằng tài khoản VS Code.** Dùng tài khoản GitHub hoặc Microsoft đã đăng nhập sẵn trong VS Code làm tên hiển thị. Hub có thể giới hạn danh sách tài khoản được vào phòng.
-- **Tham gia bằng mã mời.** Dán mã là vào phòng, toàn bộ dự án được tải về một thư mục trống mà không cần cấu hình.
-- **Chịu được mất kết nối:**
-  - tiếp tục sửa khi mất mạng; khi có mạng lại, thay đổi hai phía được gộp ba chiều;
-  - sửa lúc extension không chạy (VS Code đã tắt) được nhận ra ở lần kết nối sau;
-  - file bị sửa ở cả hai phía thì extension hỏi người dùng chọn bản giữ lại.
-- **Lịch sử và sao lưu.** Hub lưu ảnh chụp định kỳ của từng file và lưu bản trước khi xoá hay ghi đè. Máy khách sao lưu bản cục bộ trước khi bị thay thế.
-
-## So sánh với các giải pháp khác
-
-| | Live Share | Open Collaboration Tools | LAN Collab |
-|---|---|---|---|
-| Máy chủ trung gian | Dịch vụ của Microsoft | Tự dựng được | Tự dựng trong LAN |
-| File trên máy khách | Hệ thống file ảo | Hệ thống file ảo | File thật |
-| Khách tự chạy và debug trên máy mình | Không (dùng phiên debug của host) | Không | Có |
-| Công cụ dòng lệnh trên máy khách đọc được file dự án | Không | Không | Có |
-| Cần máy host luôn mở VS Code | Có | Có | Không (hub chạy độc lập) |
-
-## Kiến trúc
-
-```
- Máy A: VS Code + extension ─┐
- Máy B: VS Code + extension ─┼── TCP (mặc định 8200) ── Hub (Node.js) ── Bản chung của dự án
- Máy C: VS Code + extension ─┘                                         + lịch sử, chat
-```
-
-- **Hub** giữ bản chung của mọi file, xếp thứ tự và biến đổi các thay đổi đồng thời, rồi ghi ra đĩa, lưu lịch sử và lịch sử chat. Giao thức là JSON phân tách theo dòng, chạy trên TCP.
-- **Extension** giữ bản sao cục bộ của thư mục dự án và kết nối nó với hub:
-  - với file đang mở, extension nối editor với tầng OT;
-  - với file không mở, extension đọc và ghi thẳng xuống đĩa;
-  - extension theo dõi ổ đĩa để phát hiện thay đổi từ bên ngoài.
+- **Sửa đồng thời theo thời gian thực.** Mỗi thao tác gõ được gửi tới các máy khác ngay. Nhiều thành viên sửa cùng một file vẫn hội tụ về cùng nội dung nhờ Operational Transformation (OT).
+- **File thật trên mọi máy.** Thay đổi do công cụ AI, script hay Git ghi thẳng xuống ổ đĩa cũng được phát hiện, gộp với phần đang sửa dở rồi đồng bộ đi.
+- **Một LAN Hub, nhiều dự án.** Mỗi dự án có token, danh sách tài khoản được phép và mã mời riêng. Thêm, sửa hay tạm dừng một dự án không làm gián đoạn dự án khác.
+- **Kết nối tự chẩn đoán.** Extension thử song song mọi địa chỉ của LAN Hub, tự tìm lại LAN Hub trong mạng LAN khi địa chỉ đổi, và khi không kết nối được thì nói rõ bước nào hỏng và cần làm gì.
+- **Lịch sử lượt chỉnh sửa.** LAN Hub ghi lại từng lượt chỉnh sửa của từng thành viên. Thành viên xem nội dung sau một lượt cạnh bản hiện tại, sao chép, hoàn tác riêng lượt đó hoặc khôi phục file đã xoá.
+- **Nhận biết hoạt động của nhóm.** Con trỏ và vùng chọn của từng thành viên theo màu riêng, danh sách thành viên kèm file và dòng đang sửa, nhật ký hoạt động, chế độ đi theo một thành viên.
+- **Chat trong VS Code.** Nhắc tên bằng `@tên`, tham chiếu `file:dòng` bấm được, gửi ảnh, lịch sử chat lưu trên LAN Hub.
+- **Chịu được mất kết nối.** Thành viên tiếp tục sửa khi mất mạng. Khi kết nối lại, thay đổi hai phía được gộp ba chiều. File đổi ở cả hai phía được liệt kê để thành viên chọn bản giữ lại.
 
 ## Yêu cầu
 
 | Thành phần | Yêu cầu |
 |---|---|
-| Hub | Node.js 18 trở lên; Windows, Linux hoặc macOS; một cổng TCP được mở trong LAN |
-| Máy khách | VS Code 1.80 trở lên. Tính năng dùng tài khoản VS Code làm tên cần bản VS Code có API `authentication.getAccounts`; với bản cũ hơn, extension dùng tên máy |
-| Đóng gói extension từ mã nguồn | Node.js 18 trở lên và kết nối tới npm registry (dùng `@vscode/vsce`) |
+| Ứng dụng LAN Hub | Windows 10 hoặc 11, 64 bit. Bộ cài tự cài WebView2 khi máy chưa có |
+| `lanhub-cli` | Windows 64 bit, hoặc Linux x86_64 |
+| Extension | VS Code 1.80 trở lên |
+| Mạng | Máy thành viên kết nối được tới máy chạy LAN Hub qua cổng TCP 8200. Tìm LAN Hub trong mạng LAN dùng cổng UDP 8201 |
 
-## Cài đặt hub
+Extension 0.2 chỉ làm việc với LAN Hub 0.2. Nhóm đang dùng LAN Collab 0.1 làm theo [Nâng cấp từ LAN Collab 0.1](docs/upgrade-0.2.md).
 
-### Windows
+## Cài ứng dụng LAN Hub
 
-1. Đưa mã hub lên máy chủ theo một trong hai cách:
-   - giải nén `lan-collab-hub-<version>.zip`, lấy từ trang Releases hoặc tự đóng gói (xem [Đóng gói bản phát hành](#đóng-gói-bản-phát-hành)), ví dụ vào `D:\lan-collab\`;
-   - hoặc sao chép thư mục `hub` và `lib` của repository, giữ nguyên cấu trúc.
+Cài ứng dụng LAN Hub trên một máy luôn bật trong mạng LAN. Máy này giữ bản trên hub của mọi dự án.
 
-   Hub cần cả hai thư mục `hub` và `lib`.
-2. Sửa ba dòng đầu của `hub\start-hub.bat`:
-   ```bat
-   set "PROJECT=MyProject"
-   set "ROOT=D:\lan-collab\workspaces\MyProject"
-   set "PORT=8200"
-   ```
-   `ROOT` là thư mục chứa bản chung của dự án. Có thể để trống, khi đó máy đầu tiên tham gia sẽ gửi dự án lên.
-3. Mở cổng trên tường lửa (PowerShell, quyền Administrator):
-   ```powershell
-   New-NetFirewallRule -DisplayName "LAN Collab 8200" -Direction Inbound -Protocol TCP -LocalPort 8200 -Action Allow
-   ```
-4. Chạy `hub\start-hub.bat`. Cửa sổ in ra token và một mã mời cho mỗi địa chỉ IPv4 của máy chủ:
-   ```
-   Token         : 5f0c...
-   ... LAN Collab hub — dự án "MyProject" — thư mục D:\lan-collab\workspaces\MyProject — cổng 8200 — 0 file
-   ... Mã mời (192.168.1.10): LC-AcCoAQog...
-   ```
-   Đóng cửa sổ là dừng hub. Mọi thay đổi chưa ghi được lưu xuống đĩa trước khi hub thoát.
+### Cài đặt
 
-### Linux và macOS
+1. Tải `LanHub_<phiên bản>_x64-setup.exe` từ trang Releases của repository.
+2. Chạy bộ cài. Bộ cài cài cho tài khoản Windows đang đăng nhập và không cần quyền quản trị.
+3. Bộ cài chưa được ký số, nên Windows SmartScreen có thể chặn. Bấm **Thông tin thêm** rồi **Vẫn chạy**.
+4. Mở **LAN Hub** từ menu Start.
 
-```bash
-chmod +x hub/start-hub.sh
-PROJECT=MyProject ROOT=/srv/lan-collab/MyProject PORT=8200 ./hub/start-hub.sh
-```
+Lần chạy đầu, cửa sổ hiện danh sách dự án trống với hai nút **Thêm dự án** và **Nhập từ LAN Hub 0.1…**. Cấu hình lưu ở `%APPDATA%\LanHub\lanhub.toml`.
 
-### Chạy trực tiếp
+### Thêm dự án
 
-```bash
-node hub/hub.js --root <thư mục> [--port 8200] [--host 0.0.0.0] [--project <tên>] [--token <token>] \
-                [--allow-file <file>] [--history <thư mục>] [--exclude "mẫu1,mẫu2"]
-```
+1. Bấm **Thêm dự án**.
+2. Nhập **Tên dự án**. Thành viên thấy tên này khi tham gia.
+3. Bấm **Chọn thư mục…** và chọn thư mục chứa mã nguồn của dự án. LAN Hub đồng bộ mọi file trong thư mục này, trừ các mẫu loại trừ.
+4. Giữ **Phục vụ dự án** bật. Giữ **Quảng bá trong mạng LAN** bật nếu muốn tên dự án hiện khi thành viên tìm LAN Hub trong mạng LAN.
+5. Bấm **Thêm dự án**.
 
-| Tham số | Mặc định | Ý nghĩa |
-|---|---|---|
-| `--root` | (bắt buộc) | Thư mục chứa bản chung của dự án |
-| `--port` | `8200` | Cổng TCP |
-| `--host` | `0.0.0.0` | Địa chỉ lắng nghe |
-| `--project` | tên thư mục `--root` | Tên dự án; máy khách phải dùng đúng tên này |
-| `--token` | biến môi trường `LAN_COLLAB_TOKEN` | Token bắt buộc khi kết nối; để trống thì không kiểm tra |
-| `--allow-file` | (không có) | File danh sách tài khoản được vào phòng |
-| `--history` | `<root>/.lan-collab/history` | Thư mục lịch sử và chat |
-| `--exclude` | (không có) | Mẫu glob bổ sung không đồng bộ, phân tách bằng dấu phẩy |
+LAN Hub tạo token ngẫu nhiên cho dự án và bắt đầu phục vụ ngay. Mở dự án để thấy các tab:
 
-### Chạy như dịch vụ
-
-Windows, dùng [NSSM](https://nssm.cc/):
-
-```powershell
-nssm install LanCollab "C:\Program Files\nodejs\node.exe"
-nssm set LanCollab AppParameters "D:\lan-collab\hub\hub.js --root D:\lan-collab\workspaces\MyProject --port 8200 --project MyProject --allow-file D:\lan-collab\hub\allowed-accounts-MyProject.txt"
-nssm set LanCollab AppEnvironmentExtra LAN_COLLAB_TOKEN=<token>
-nssm start LanCollab
-```
-
-Linux, dùng systemd (`/etc/systemd/system/lan-collab.service`):
-
-```ini
-[Unit]
-Description=LAN Collab hub
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/node /opt/lan-collab/hub/hub.js --root /srv/lan-collab/MyProject --port 8200 --project MyProject --allow-file /opt/lan-collab/hub/allowed-accounts-MyProject.txt
-Environment=LAN_COLLAB_TOKEN=<token>
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Tệp do hub tạo ra
-
-| Tệp | Nội dung |
+| Tab | Nội dung |
 |---|---|
-| `hub/token-<PROJECT>.txt` | Token, do script khởi động tạo một lần. Xoá tệp này để đổi token; mọi mã mời cũ sẽ hết hiệu lực |
-| `hub/allowed-accounts-<PROJECT>.txt` | Danh sách tài khoản được vào phòng (xem [Bảo mật](#bảo-mật)) |
-| `<root>/.lan-collab/hub.json` | Mã định danh của bản chung. Không xoá: máy khách dùng mã này để nhận ra đúng hub |
-| `<root>/.lan-collab/history/` | Ảnh chụp từng file, tối đa 10 phút một lần, cùng bản trước mỗi lần xoá hoặc ghi đè; `chat.jsonl` là lịch sử chat, `chat-media/` chứa ảnh gửi trong chat |
+| **Tổng quan** | Số thành viên, số file, hoạt động gần nhất, thư mục, trạng thái |
+| **Truy cập** | Token (hiện, sao chép, đổi token) và danh sách tài khoản được phép, mỗi dòng một tài khoản dạng `github:tên` hoặc `microsoft:email`. Danh sách trống thì mọi máy có token đều vào được |
+| **Đồng bộ** | Mẫu loại trừ, kèm danh sách file khớp mẫu |
+| **Lịch sử** | Giới hạn lịch sử lượt chỉnh sửa (thời gian chờ, số ngày giữ, dung lượng tối đa) và nút **Dọn lịch sử ngay** |
+| **Mã mời** | Mã mời `LC3-` kèm mã QR và nút **Sao chép mã mời** |
+| **Thành viên** | Thành viên đang kết nối, địa chỉ IP, file đang mở, độ trễ |
+| **Nhật ký** | Nhật ký của dự án, có tìm kiếm, lọc và **Xuất nhật ký…** |
+| **Cài đặt** | Sửa tên, thư mục, tạm dừng hoặc **Xoá dự án**. Xoá dự án không xoá file |
 
-Thư mục `.lan-collab` không bao giờ được đồng bộ sang máy khách.
+Đổi token làm mọi mã mời cũ của dự án hết hiệu lực. Thành viên đã kết nối cần mã mời mới.
 
-## Cài đặt extension
+### Mở tường lửa
 
-Lấy file `lan-collab-<version>.vsix` từ trang Releases của repository, hoặc tự đóng gói theo mục [Đóng gói bản phát hành](#đóng-gói-bản-phát-hành).
+Windows chặn kết nối từ máy khác tới LAN Hub cho tới khi có quy tắc tường lửa.
 
-Cài vào VS Code bằng một trong hai cách:
+1. Trong ứng dụng LAN Hub, bấm biểu tượng bánh răng **Cài đặt LAN Hub** ở đầu cửa sổ.
+2. Ở thẻ **Tường lửa Windows**, bấm **Mở tường lửa**.
+3. Windows hỏi quyền quản trị một lần. Chọn **Có**.
 
-```bash
-code --install-extension dist/lan-collab-0.1.1.vsix
-```
+Ứng dụng thêm quy tắc `LAN Hub TCP 8200` cho cổng kết nối và `LAN Hub UDP 8201` cho tìm LAN Hub trong mạng LAN, theo cổng đang cấu hình. Thẻ hiện trạng thái từng cổng: **Đã mở**, **Chưa mở**, **Quy tắc đang tắt** hoặc **Bị chặn**. **Sao chép lệnh** cho lệnh `netsh` tương ứng để chạy tay. Máy thành viên không cần mở cổng nào.
 
-hoặc trong VS Code: **Extensions** → `···` → **Install from VSIX…**
+### Chạy khi đăng nhập và khay hệ thống
 
-Sau khi cài, thanh hoạt động bên trái có biểu tượng **LAN Collab**, gồm hai mục **Đồng đội** và **Chat**.
+- Ở thẻ **Khởi động** của màn hình **Cài đặt LAN Hub**, bật **Chạy LAN Hub khi đăng nhập Windows**. LAN Hub chạy ẩn trong khay hệ thống và phục vụ dự án mà không mở cửa sổ.
+- Đóng cửa sổ thì LAN Hub thu xuống khay hệ thống và vẫn phục vụ dự án. Menu khay có **Mở LAN Hub**, tạm dừng hoặc tiếp tục từng dự án, **Sao chép mã mời** và **Thoát**. **Thoát** ghi mọi file đang chờ rồi mới dừng.
+- Mỗi máy chỉ chạy một ứng dụng LAN Hub. Mở lần hai thì cửa sổ đang chạy hiện lên.
 
-Để cập nhật lên phiên bản mới, cài file `.vsix` mới theo cùng cách trên; VS Code sẽ thay bản cũ.
+### Cài đặt LAN Hub
 
-## Đóng gói bản phát hành
+Màn hình **Cài đặt LAN Hub** áp dụng thay đổi ngay khi bấm **Lưu cài đặt**, không cần khởi động lại:
 
-Một bản phát hành gồm hai file, cùng được tạo trong thư mục `dist/`:
+- **Tên LAN Hub**. Để trống thì dùng tên máy.
+- **Địa chỉ nhận kết nối** và **Cổng TCP**, mặc định `0.0.0.0` và `8200`.
+- **Cho máy khác tự tìm LAN Hub** và **Cổng UDP để tìm LAN Hub**, mặc định bật và `8201`.
+- **Địa chỉ công khai** và **Mã hoá kết nối bằng TLS**, dùng khi thành viên kết nối từ ngoài mạng LAN. Xem [Chạy LAN Hub trên máy chủ](docs/lanhub-server.md).
 
-| File | Dùng cho | Nội dung |
+**Thêm LAN Hub từ xa** quản lý một `lanhub-cli` trên máy chủ khác như LAN Hub trên máy này. Cách bật quản trị từ xa nằm ở [Chạy LAN Hub trên máy chủ](docs/lanhub-server.md).
+
+### Kiểm tra từ trình duyệt
+
+Khi LAN Hub chạy, mở `http://<IP của máy LAN Hub>:8200/` trong trình duyệt của máy thành viên. Trang hiện tên LAN Hub, phiên bản và các dự án đang quảng bá. Trang mở được nghĩa là mạng và tường lửa đã thông, lỗi còn lại nằm ở phía extension. LAN Hub bật TLS vẫn trả trang này qua `http://`.
+
+## Chạy LAN Hub không giao diện
+
+`lanhub-cli` là LAN Hub không có cửa sổ, dùng trên máy chủ hoặc khi không muốn cài ứng dụng. Nó đọc cùng định dạng `lanhub.toml` với ứng dụng LAN Hub và áp dụng lại file mỗi khi file đổi.
+
+1. Tải `lanhub-cli-<phiên bản>-<nền tảng>.zip` (Windows) hoặc `lanhub-cli-<phiên bản>-x86_64-unknown-linux-gnu.tar.gz` (Linux) từ trang Releases và giải nén.
+2. Viết `lanhub.toml` theo bảng dưới đây.
+3. Kiểm tra cấu hình, cổng và tường lửa mà không thay đổi gì:
+
+   ```
+   lanhub-cli --diagnose --config lanhub.toml
+   ```
+
+4. Chạy LAN Hub:
+
+   ```
+   lanhub-cli --config lanhub.toml
+   ```
+
+   Mỗi dự án in một dòng `Mã mời: LC3-...` khi khởi động. Gửi mã đó cho thành viên.
+
+Không có `--config`, `lanhub-cli` đọc `%APPDATA%\LanHub\lanhub.toml` trên Windows và `$XDG_CONFIG_HOME/lanhub/lanhub.toml` (mặc định `~/.config/lanhub/lanhub.toml`) trên Linux. Chạy như dịch vụ systemd hoặc dịch vụ Windows, bật TLS, địa chỉ công khai và quản trị từ xa: xem [Chạy LAN Hub trên máy chủ](docs/lanhub-server.md).
+
+### Tham chiếu `lanhub.toml`
+
+Ví dụ đầy đủ có chú thích: [`lanhub/examples/lanhub.toml`](lanhub/examples/lanhub.toml). Khoá không có trong bảng là lỗi. Đường dẫn tương đối tính từ thư mục chứa file.
+
+| Khoá | Mặc định | Ý nghĩa |
 |---|---|---|
-| `lan-collab-<version>.vsix` | Máy khách | Extension VS Code |
-| `lan-collab-hub-<version>.zip` | Máy chủ | `hub/` (`hub.js`, `start-hub.bat`, `start-hub.sh`), `lib/`, `LICENSE`, nằm trong thư mục gốc `lan-collab-hub/` |
+| `[hub] name` | tên máy | Tên LAN Hub thành viên thấy |
+| `[hub] bind` | `"0.0.0.0"` | Địa chỉ nhận kết nối |
+| `[hub] port` | `8200` | Cổng TCP dùng chung cho mọi dự án |
+| `[hub] discovery` | `true` | Trả lời khi extension tìm LAN Hub trong mạng LAN |
+| `[hub] discovery_port` | `8201` | Cổng UDP để tìm LAN Hub |
+| `[hub] public_address` | `[]` | Tên miền hoặc IP công khai. Mã mời đặt các địa chỉ này lên đầu |
+| `[hub.tls] enabled` | `false` | Bật TLS. Mã mời mang vân tay chứng chỉ |
+| `[hub.tls] cert`, `key` | không có | Chứng chỉ và khoá PEM có sẵn, luôn đi cùng nhau. Không đặt thì LAN Hub tự tạo chứng chỉ tự ký một lần |
+| `[hub.admin] remote` | `false` | Bật quản trị từ xa |
+| `[hub.admin] token`, `token_sha256` | không có | Token quản trị (ít nhất 16 ký tự) hoặc SHA-256 của nó. Chỉ đặt một trong hai |
+| `[[project]] name` | bắt buộc | Tên dự án, không phân biệt chữ hoa và chữ thường |
+| `[[project]] root` | bắt buộc | Thư mục dự án |
+| `[[project]] enabled` | `true` | `false` thì tạm dừng dự án |
+| `[[project]] token` | `""` | Token của dự án. Chuỗi rỗng cho mọi máy trong mạng vào |
+| `[[project]] allow` | `[]` | Danh sách tài khoản được phép. Rỗng thì mọi máy có token đều vào |
+| `[[project]] allow_file` | không có | File danh sách tài khoản của LAN Collab 0.1, cộng thêm vào `allow` |
+| `[[project]] exclude` | `[]` | Mẫu loại trừ, cộng thêm vào danh sách mặc định |
+| `[[project]] advertise` | `true` | Hiện tên dự án khi tìm LAN Hub trong mạng LAN |
+| `[project.history] enabled` | `true` | Ghi lịch sử lượt chỉnh sửa |
+| `[project.history] idle_minutes` | `15` | Lượt chỉnh sửa kết thúc sau từng này phút không sửa |
+| `[project.history] keep_days` | `30` | Lượt chỉnh sửa cũ hơn bị xoá |
+| `[project.history] max_mb` | `2048` | Dung lượng lịch sử tối đa của dự án |
 
-`<version>` lấy từ trường `version` trong `package.json`.
+Danh sách loại trừ mặc định: `.git`, `.lan-collab`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `*.lc-tmp`, `~$*`, `.DS_Store`, `Thumbs.db`.
 
-### Yêu cầu
+## Cài extension
 
-- Node.js 18 trở lên (kèm npm).
-- Kết nối tới npm registry khi đóng gói `.vsix`. Lệnh `npx` tải công cụ `@vscode/vsce` ở lần chạy đầu và lưu vào bộ nhớ đệm của npm.
-- File `.zip` của hub được tạo bằng thư viện có sẵn của Node.js, không cần công cụ nén bên ngoài.
+1. Tải `lan-collab-<phiên bản>.vsix` từ trang Releases.
+2. Cài bằng lệnh:
 
-### Các bước
-
-1. Lấy mã nguồn:
-   ```bash
-   git clone https://github.com/Ndqitisme/LAN_Collab_LiveShare.git
-   cd LAN_Collab_LiveShare
    ```
-2. Chạy kiểm thử (khuyến nghị trước mỗi lần phát hành):
-   ```bash
-   npm test
+   code --install-extension lan-collab-<phiên bản>.vsix
    ```
-3. Đóng gói:
 
-   | Lệnh | Kết quả |
-   |---|---|
-   | `npm run package` | `dist/lan-collab-<version>.vsix` |
-   | `npm run package:hub` | `dist/lan-collab-hub-<version>.zip` |
-   | `npm run package:all` | Cả hai file |
+   Hoặc trong VS Code: **Extensions**, menu `···`, **Install from VSIX…**.
 
-   Ví dụ kết quả của `npm run package:all`:
-   ```
-   DONE  Packaged: dist\lan-collab-0.1.1.vsix (16 files, 124 KB)
-   Created dist\lan-collab-hub-0.1.1.zip (8 files)
-   ```
-4. Kiểm tra nhanh:
-   - extension: `code --install-extension dist/lan-collab-<version>.vsix`, rồi mở lại cửa sổ VS Code và xác nhận biểu tượng LAN Collab xuất hiện;
-   - hub: giải nén file `.zip` vào một thư mục tạm, rồi chạy `node lan-collab-hub/hub/hub.js --root <thư mục trống> --port 8200`; hub in ra dòng khởi động và mã mời.
+Thanh hoạt động bên trái có thêm biểu tượng **LAN Collab**. Khi chưa kết nối, mục **Bắt đầu** có hai liên kết **Thiết lập kết nối** và **Tham gia bằng mã mời**. Trang **Bắt đầu với LAN Collab** trong phần Walkthroughs của VS Code đi qua các bước lấy mã mời, tham gia, kiểm tra kết nối, chat và xem lịch sử.
 
-### Phát hành trên GitHub
+Cập nhật bằng cách cài file `.vsix` mới theo cùng cách. VS Code thay bản cũ.
 
-1. Tăng `version` trong `package.json` theo [Semantic Versioning](https://semver.org/), commit thay đổi.
-2. Chạy `npm run package:all`.
-3. Tạo tag và đẩy lên:
-   ```bash
-   git tag v0.1.1
-   git push origin v0.1.1
-   ```
-4. Trên GitHub: **Releases** → **Draft a new release**, chọn tag vừa tạo, đính kèm hai file trong `dist/`, ghi tóm tắt thay đổi, rồi bấm **Publish release**.
+## Tham gia dự án bằng mã mời
 
-Thư mục `dist/` nằm trong `.gitignore`. File đóng gói chỉ được phân phối qua Releases, không commit vào repository.
+Mã mời bắt đầu bằng `LC3-`. Mã chứa mọi địa chỉ IPv4 của máy LAN Hub, cổng, tên dự án, token, và vân tay chứng chỉ khi LAN Hub bật TLS.
 
-## Tham gia dự án
+1. Lấy mã mời ở một trong các nơi sau:
+   - Ứng dụng LAN Hub: mở dự án, tab **Mã mời**, bấm **Sao chép mã mời**.
+   - Menu khay của LAN Hub: **Sao chép mã mời**.
+   - Một thành viên đã kết nối: chạy **LAN Collab: Sao chép mã mời**.
+2. Trên máy mới, mở một thư mục trống trong VS Code, hoặc không mở thư mục nào.
+3. Nhấn `Ctrl+Shift+P`, chạy **LAN Collab: Tham gia bằng mã mời** và dán mã.
+4. Extension kiểm tra mã với LAN Hub trước khi ghi bất kỳ file nào.
+5. Nếu thư mục đang mở không trống, chọn hoặc tạo một thư mục trống cho dự án. VS Code mở thư mục đó.
+6. Extension kết nối và tải toàn bộ dự án. Thanh trạng thái hiện **Đang đồng bộ**, rồi số thành viên khi đã sẵn sàng.
 
-### Bằng mã mời
+Thư mục đã tham gia ghi nhớ LAN Hub của nó trên máy đó, nên lần mở sau tự kết nối. Token được lưu trong kho bí mật của hệ điều hành, không nằm trong cài đặt.
 
-Mã mời có dạng `LC-...`. Mã chứa địa chỉ hub, cổng, tên dự án và token.
+Tham gia vào một thư mục đã có file thì extension mở bảng đồng bộ trước khi ghi gì. Bảng liệt kê từng file khác bản trên hub, mỗi file chọn được **Bản trên hub**, **Bản trên máy này** hoặc **Gộp**, kèm nút **So sánh**. File bị thay được sao lưu vào `.lan-collab/backup/`. Lệnh **LAN Collab: Khôi phục từ bản sao lưu** lấy lại các bản đó.
 
-1. Lấy mã ở một trong hai nơi:
-   - cửa sổ hub: chọn dòng có địa chỉ IP cùng dải mạng với máy khách;
-   - một máy đã ở trong phòng: menu LAN Collab trên thanh trạng thái → **Sao chép mã mời**.
-2. Trên máy mới: `Ctrl+Shift+P` → **LAN Collab: Tham gia bằng mã**, rồi dán mã.
-3. Extension kiểm tra mã với hub trước khi thay đổi bất kỳ file nào.
-4. Chọn hoặc tạo một thư mục trống. VS Code mở thư mục đó, kết nối và tải toàn bộ dự án, có thanh tiến trình.
+Mã mời bắt đầu bằng `LC-` là mã của LAN Collab 0.1. Extension 0.2 không đọc mã này và không thay đổi file nào. Lấy mã mời mới trong ứng dụng LAN Hub.
 
-Thư mục đã tham gia bằng mã sẽ ghi nhớ hub của nó trên máy đó, nên các lần mở sau sẽ tự kết nối.
+Khi không dùng được mã mời, mở **LAN Collab: Thiết lập kết nối**. Bảng này cho dán mã mời, chọn một LAN Hub tìm thấy trong mạng LAN, hoặc nhập địa chỉ, cổng, dự án và token bằng tay.
 
-### Cấu hình thủ công
+## Đọc chẩn đoán kết nối
 
-Thêm vào `.vscode/settings.json` của dự án:
+### Thanh trạng thái
 
-```jsonc
-{
-  "lanCollab.server": "192.168.1.10:8200",
-  "lanCollab.project": "MyProject",
-  "files.saveConflictResolution": "overwriteFileOnDisk"
-}
-```
-
-Đặt token trong User settings (`Preferences: Open User Settings (JSON)`) để không đưa token vào kho mã:
-
-```jsonc
-{ "lanCollab.token": "<token>" }
-```
-
-Khi đồng bộ, extension đã gộp các thay đổi từ bên ngoài vào editor trước khi lưu. Vì vậy `files.saveConflictResolution: overwriteFileOnDisk` là an toàn với các file được đồng bộ, và giúp VS Code không hiện hộp thoại "file trên đĩa mới hơn" trong trường hợp một công cụ ghi file đúng lúc file đó đang có thay đổi chưa lưu.
-
-### Lần kết nối đầu tiên
-
-Khi một thư mục kết nối lần đầu với một hub mà có thay đổi tới file cục bộ, extension hiện hộp thoại xác nhận, liệt kê số file sẽ được:
-
-- tải về;
-- ghi đè;
-- gửi lên;
-- xoá.
-
-Hộp thoại không hiện nếu lần kết nối đó chỉ tải file về thư mục trống. Mọi file bị ghi đè hoặc xoá đều được sao lưu vào `.lan-collab/backup/<thời điểm>/`.
-
-## Sử dụng
-
-| Thành phần | Chức năng |
+| Chữ trên thanh trạng thái | Ý nghĩa |
 |---|---|
-| Thanh trạng thái | Số người trong phòng, số tin chưa đọc, trạng thái kết nối. Bấm vào để mở menu |
-| Mục **Đồng đội** | Mỗi thành viên kèm `file:dòng`, phiên debug và trạng thái. Bấm tên để nhảy tới vị trí của người đó; rê chuột để xem tài khoản. Mục **Hoạt động gần đây** là nhật ký của phòng |
-| Mục **Chat** | Enter để gửi, Shift+Enter để xuống dòng. Gõ `@` để chọn người cần nhắc; `@all` nhắc cả phòng. Các nút dưới ô nhập: emoji, gửi ảnh, chèn `file:dòng` của editor đang mở. Ảnh có thể dán thẳng bằng Ctrl+V; ảnh lớn được thu nhỏ còn cạnh dài 1920 px trước khi gửi, giới hạn 4 MB. Bấm vào ảnh để mở bằng trình xem ảnh của VS Code. Mọi chuỗi dạng `đường/dẫn.ext:dòng` đều mở được bằng cách bấm vào |
-| Trong editor | Con trỏ và vùng chọn của người khác theo màu riêng, tên hiển thị ở cuối dòng |
+| `LAN Collab` | Chưa kết nối |
+| **Đang tìm LAN Hub**, **Đang kết nối**, **Đang đồng bộ** | Đang kết nối tới LAN Hub |
+| **4 thành viên** | Đã kết nối, đang đồng bộ theo thời gian thực |
+| **Mất kết nối** | Đang kết nối lại sau 1, 2, 5, 10 rồi 30 giây. Thay đổi trên máy này được gửi khi kết nối lại |
+| **Chưa kết nối được** | Chưa lần nào kết nối được trong phiên này, extension vẫn đang thử lại |
+| **Cần xử lý** | LAN Hub từ chối kết nối. Thông báo kèm theo nói lý do và có nút xử lý |
 
-### Lệnh
+Bấm thanh trạng thái để mở menu LAN Collab.
 
-| Lệnh | Mô tả |
-|---|---|
-| `LAN Collab: Tham gia bằng mã` | Tham gia phòng bằng mã mời |
-| `LAN Collab: Sao chép mã mời` | Chép mã mời của phòng hiện tại vào clipboard |
-| `LAN Collab: Kết nối` / `Ngắt kết nối` | Kết nối hoặc ngắt kết nối thư mục hiện tại |
-| `LAN Collab: Đi theo một người` / `Thôi đi theo` | Màn hình tự di chuyển theo file và dòng của một thành viên |
-| `LAN Collab: Đặt trạng thái (đang làm gì)` | Ghi một dòng trạng thái hiển thị cho cả phòng |
-| `LAN Collab: Dùng tài khoản VS Code (GitHub/Microsoft)` | Chọn tài khoản đã đăng nhập trong VS Code để làm tên hiển thị |
-| `LAN Collab: Mở chat` | Mở mục Chat |
-| `LAN Collab: Xem nhật ký` | Mở kênh Output của extension |
-| `LAN Collab: Menu` | Menu tổng hợp (cũng mở bằng cách bấm thanh trạng thái) |
+### Chẩn đoán kết nối
 
-## Tham chiếu cấu hình
+Mỗi lần kết nối lại, extension thử song song mọi địa chỉ đã biết. Khi không địa chỉ nào trả lời, extension tìm LAN Hub trong mạng LAN theo mã định danh trong mã mời, tìm thấy ở địa chỉ mới thì tự cập nhật và kết nối tiếp.
 
-| Thiết lập | Mặc định | Mô tả |
+Khi vẫn không kết nối được, chạy **LAN Collab: Chẩn đoán kết nối**, hoặc bấm **Chẩn đoán** trên thông báo lỗi hay trong bảng **Kết nối LAN Hub**. Lệnh chạy tám bước theo thứ tự và hiện kết quả từng bước là **Đạt**, **Đã tự khắc phục**, **Không đạt** hoặc **Bỏ qua**:
+
+1. **Cấu hình thư mục**: thư mục đã gắn với LAN Hub chưa.
+2. **Kết nối tới địa chỉ đã biết**: thử mọi địa chỉ trong mã mời và địa chỉ kết nối được lần trước, mỗi địa chỉ chờ 3 giây.
+3. **Tìm LAN Hub trong mạng LAN**: tìm qua UDP khi bước 2 không thành công.
+4. **Đường mạng tới LAN Hub**: phân loại lỗi mạng.
+5. **Vân tay TLS**: so chứng chỉ của LAN Hub với vân tay trong mã mời.
+6. **Phiên bản, dự án, token và tài khoản**: LAN Hub có nhận máy này không.
+7. **Thư mục dự án**: có ghi được không, có phải thư mục của dự án khác không.
+8. **Độ trễ tới LAN Hub**.
+
+**Sao chép báo cáo** sao chép kết quả kèm phiên bản và card mạng, đã che token và mã mời, để gửi cho người quản trị LAN Hub.
+
+### Từng lỗi và cách xử lý
+
+| Kết quả chẩn đoán | Nguyên nhân | Cách xử lý |
 |---|---|---|
-| `lanCollab.server` | `""` | Địa chỉ hub dạng `IP:cổng`. Không cần nếu thư mục đã tham gia bằng mã mời |
-| `lanCollab.project` | `""` | Tên dự án trên hub. Hub từ chối kết nối nếu tên không khớp |
-| `lanCollab.token` | `""` | Token của hub. Nên đặt trong User settings |
-| `lanCollab.name` | `""` | Tên hiển thị. Để trống: dùng tên tài khoản VS Code; nếu chưa đăng nhập thì dùng `tài-khoản-hệ-điều-hành@tên-máy`. Chỉ đặt được trong User settings |
-| `lanCollab.autoConnect` | `true` | Tự kết nối khi mở thư mục đã gắn với hub |
-| `lanCollab.autoSave` | `true` | Tự lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên đĩa của mọi máy luôn cập nhật |
-| `lanCollab.exclude` | `[]` | Mẫu glob bổ sung không đồng bộ, ví dụ `["output.csv", "build/**"]` |
+| Thư mục này chưa gắn với LAN Hub nào | Thư mục chưa tham gia dự án | Chạy **Tham gia bằng mã mời** |
+| LAN Hub chưa chạy hoặc sai cổng | Máy LAN Hub từ chối kết nối ở cổng đó | Mở ứng dụng LAN Hub và kiểm tra dự án đang chạy. Kiểm tra cổng trong mã mời trùng với **Cổng TCP** của LAN Hub |
+| Cổng không phản hồi sau 3 giây | Tường lửa trên máy LAN Hub chặn cổng, hai máy khác mạng con, hoặc VPN đang bật | Bấm **Mở tường lửa** trong ứng dụng LAN Hub. Tắt VPN. Mở `http://<IP>:8200/` trong trình duyệt để kiểm tra mạng |
+| Máy này không có đường mạng tới địa chỉ | Hai máy không cùng mạng | Nối hai máy vào cùng mạng LAN và tắt VPN |
+| Không tìm thấy LAN Hub trong mạng LAN | LAN Hub chưa chạy, đã tắt tìm kiếm trong mạng LAN, hoặc tường lửa chặn cổng UDP 8201 | Kiểm tra LAN Hub đang chạy và quy tắc `LAN Hub UDP 8201`. Hoặc dán mã mời mới có địa chỉ hiện tại |
+| Chưa tìm được LAN Hub vì thư mục chưa có mã định danh | Thư mục được thiết lập bằng tay và chưa kết nối lần nào | Dán mã mời mới |
+| Chứng chỉ TLS khác vân tay trong mã mời | LAN Hub đổi chứng chỉ, hoặc có máy khác đứng giữa | Extension dừng và không tự bỏ qua. Lấy mã mời mới từ người quản trị LAN Hub |
+| Cổng nhận kết nối nhưng không trả lời theo giao thức LAN Hub | Một chương trình khác dùng cổng đó | Kiểm tra địa chỉ và cổng trong mã mời |
+| LAN Hub từ chối token của máy này | Token đã đổi hoặc mã mời đã cũ | **Dán mã mời mới** hoặc **Nhập token** |
+| LAN Hub không có dự án | Tên dự án sai, hoặc dự án đã bị xoá hay tạm dừng | **Chọn dự án** trong danh sách LAN Hub đang phục vụ, hoặc dán mã mời mới |
+| LAN Hub chỉ nhận tài khoản trong danh sách tài khoản được phép | Dự án có danh sách tài khoản và VS Code chưa đăng nhập | **Đăng nhập** GitHub hoặc Microsoft trong VS Code |
+| Tài khoản chưa có trong danh sách tài khoản được phép | Người quản trị LAN Hub chưa thêm tài khoản | **Sao chép dòng** và gửi cho người quản trị LAN Hub để thêm vào tab **Truy cập**, hoặc **Đổi tài khoản** |
+| LAN Hub dùng phiên bản giao thức mới hơn hoặc cũ hơn | Extension và LAN Hub khác phiên bản | Cập nhật bên cũ hơn. Extension 0.2 cần LAN Hub 0.2 |
+| Không ghi được vào thư mục | Thư mục chỉ đọc | Cấp quyền ghi hoặc chọn thư mục khác |
+| Thư mục là thư mục dự án của một LAN Hub khác | Thư mục đã gắn với LAN Hub khác | Chọn một thư mục trống |
 
-Danh sách không đồng bộ mặc định: `.git`, `.lan-collab`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `~$*` (file khoá của Microsoft Office), `.DS_Store`, `Thumbs.db`. Mẫu không chứa `/` áp dụng ở mọi cấp thư mục. Nên loại trừ những file mà mỗi máy tự sinh ra khi chạy chương trình (kết quả chạy, thư mục build), để kết quả của các máy không ghi đè lên nhau.
+Khi bước mạng không đạt, bảng **Kết nối LAN Hub** có thêm **Thử lại**, **Tìm lại LAN Hub** và **Hướng dẫn mở tường lửa** với lệnh PowerShell cho máy LAN Hub.
+
+## Dùng lịch sử lượt chỉnh sửa
+
+Một lượt chỉnh sửa là chuỗi thay đổi liên tục của một thành viên trên một file. Lượt chỉnh sửa kết thúc khi thành viên khác sửa file đó, khi thành viên ngừng sửa quá 15 phút, khi file bị xoá hoặc đổi tên, hoặc khi LAN Hub dừng. LAN Hub ghi nội dung file ở đầu và cuối mỗi lượt, kèm nguồn thay đổi: gõ trong editor, công cụ ngoài editor, hoàn tác hay gộp khi kết nối lại.
+
+Mở mục **Lịch sử chỉnh sửa** trong thanh LAN Collab, chạy **LAN Collab: Xem lịch sử chỉnh sửa**, hoặc nhấn `Ctrl+Alt+L` rồi `H`. Chọn **File đang mở** hoặc **Toàn dự án**. Mỗi dòng hiện tác giả, thời gian, nguồn, số ký tự thêm và bớt. Lượt đang diễn ra có nhãn **Đang sửa**.
+
+Chọn một lượt chỉnh sửa để có các thao tác:
+
+- **Mở bản sau lượt chỉnh sửa**: mở nội dung file ngay sau lượt đó ở cửa sổ chỉ đọc. Nhấp đúp vào dòng cũng mở bản này.
+- **So sánh với bản hiện tại** và **So sánh với bản trước đó**: mở trình so sánh song song của VS Code.
+- **Sao chép nội dung**: sao chép toàn bộ nội dung sau lượt đó. Trong cửa sổ chỉ đọc, chọn và sao chép bất kỳ đoạn nào.
+- **Hoàn tác lượt chỉnh sửa này**: bỏ riêng thay đổi của lượt đó và giữ thay đổi đến sau, giống `git revert`. Extension mở bản xem trước, rồi hỏi xác nhận. Kết quả đồng bộ tới mọi thành viên và thành một lượt chỉnh sửa mới có nguồn hoàn tác. Đoạn đã bị sửa lại sau đó được giữ nguyên và được đếm trong hộp xác nhận.
+- **Khôi phục file**: với lượt xoá file, tạo lại file từ nội dung lúc bị xoá.
+- **Khôi phục phiên bản này**: với file nhị phân, thay bản hiện tại bằng phiên bản đó. Bản hiện tại vẫn còn trong lịch sử.
+
+Lịch sử nằm ở `.lan-collab/history/` trong thư mục dự án trên máy LAN Hub. Mặc định giữ 30 ngày và tối đa 2 GB mỗi dự án. Người quản trị LAN Hub đổi giới hạn ở tab **Lịch sử**.
+
+## Chat
+
+Mở mục **Chat** trong thanh LAN Collab, hoặc nhấn `Ctrl+Alt+L` rồi `C`.
+
+- Enter để gửi, Shift+Enter để xuống dòng. Tin nhắn dài tối đa 4000 ký tự.
+- Gõ `@` để chọn thành viên cần nhắc. Thành viên được nhắc nhận thông báo.
+- Mọi chuỗi dạng `đường/dẫn.ext:dòng` mở được file tại dòng đó. Nút chèn vị trí file và dòng đang mở đưa vị trí hiện tại vào tin nhắn.
+- Gửi ảnh PNG, JPEG, GIF hoặc WebP bằng Ctrl+V hoặc chọn file, tối đa 4 MB. Ảnh lớn được thu nhỏ trước khi gửi.
+- Hỗ trợ liên kết web, `code`, khối mã và bảng chọn emoji.
+
+Lịch sử chat lưu trong `.lan-collab/history/` của dự án trên máy LAN Hub.
+
+## Lệnh và cài đặt của extension
+
+| Lệnh | Việc làm |
+|---|---|
+| **LAN Collab: Tham gia bằng mã mời** | Tham gia dự án bằng mã mời |
+| **LAN Collab: Sao chép mã mời** | Sao chép mã mời của dự án đang mở |
+| **LAN Collab: Thiết lập kết nối** | Mở bảng **Kết nối LAN Hub** |
+| **LAN Collab: Chẩn đoán kết nối** | Chạy tám bước chẩn đoán |
+| **LAN Collab: Kết nối**, **Ngắt kết nối** | Kết nối hoặc ngắt kết nối thư mục đang mở |
+| **LAN Collab: Xem lịch sử chỉnh sửa** | Mở mục **Lịch sử chỉnh sửa** |
+| **LAN Collab: Mở chat** | Mở mục **Chat** |
+| **LAN Collab: Đi theo thành viên**, **Thôi đi theo** | Editor mở theo file và dòng của một thành viên |
+| **LAN Collab: Đặt trạng thái** | Ghi một dòng trạng thái hiện với thành viên khác |
+| **LAN Collab: Chọn tài khoản VS Code** | Chọn tài khoản GitHub hoặc Microsoft làm tên hiển thị |
+| **LAN Collab: Khôi phục từ bản sao lưu** | Lấy lại file từ `.lan-collab/backup/` |
+| **LAN Collab: Xem nhật ký** | Mở kênh Output "LAN Collab" |
+| **LAN Collab: Mở menu** | Menu tổng hợp, cũng mở khi bấm thanh trạng thái |
+
+| Cài đặt | Mặc định | Ý nghĩa |
+|---|---|---|
+| `lanCollab.server` | `""` | Địa chỉ LAN Hub dạng `IP:cổng`. Không cần khi thư mục đã tham gia bằng mã mời |
+| `lanCollab.project` | `""` | Tên dự án trên LAN Hub |
+| `lanCollab.token` | `""` | Token của LAN Hub. Khi khởi động, extension chuyển token này vào kho bí mật của hệ điều hành và xoá khỏi cài đặt |
+| `lanCollab.name` | `""` | Tên hiển thị. Để trống thì dùng tên tài khoản VS Code, hoặc `tài-khoản-Windows@tên-máy` |
+| `lanCollab.autoConnect` | `true` | Tự kết nối khi mở thư mục đã gắn với LAN Hub |
+| `lanCollab.autoSave` | `true` | Tự lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên ổ đĩa của mọi máy luôn mới |
+| `lanCollab.exclude` | `[]` | Mẫu glob không đồng bộ, cộng thêm vào danh sách mặc định |
+
+Nên loại trừ file mà mỗi máy tự sinh khi chạy chương trình, như kết quả chạy và thư mục build, để kết quả của các máy không ghi đè lên nhau.
 
 ## Làm việc với Git
 
-Thư mục `.git` không được đồng bộ. Vì mọi máy có cùng nội dung thư mục làm việc, chỉ cần một người thực hiện commit:
+Thư mục `.git` không được đồng bộ. Mọi máy có cùng thư mục làm việc, nên chỉ cần một thành viên commit:
 
-1. Người commit: `git add`, `git commit`, `git push` như bình thường.
-2. Các máy khác: `git fetch` rồi `git reset origin/<nhánh>`, không dùng `--hard`. Lệnh này chỉ dời HEAD và index tới commit mới; thư mục làm việc vốn đã giống nội dung của commit đó.
+1. Thành viên commit chạy `git add`, `git commit`, `git push` như bình thường.
+2. Các máy khác chạy `git fetch` rồi `git reset origin/<nhánh>`, không dùng `--hard`. Lệnh này chỉ dời HEAD và index tới commit mới, vì thư mục làm việc đã giống nội dung commit đó.
 
-Các thao tác thay đổi nhiều file như `git checkout`, `git pull`, `git stash` trên một máy sẽ được đồng bộ tới mọi máy. Muốn làm việc riêng trên một nhánh khác, hãy ngắt kết nối trước. Khi kết nối lại, các file chỉ thay đổi trên máy đó sẽ được gửi lên; file thay đổi ở cả hai phía sẽ cần người dùng chọn bản giữ lại.
+`git checkout`, `git pull` hay `git stash` trên một máy thay đổi nhiều file, và mọi thay đổi đó đồng bộ tới các máy khác. Muốn làm việc riêng trên nhánh khác thì ngắt kết nối trước. Khi kết nối lại, file chỉ đổi trên máy đó được gửi lên, còn file đổi ở cả hai phía hiện trong bảng đồng bộ để chọn.
 
 ## Cơ chế đồng bộ
 
 | Loại dữ liệu | Cách đồng bộ |
 |---|---|
-| File văn bản (UTF-8, tối đa 1 MB) | Theo từng thao tác, dùng OT; hub là nơi xếp thứ tự |
-| File nhị phân hoặc lớn hơn 1 MB | Thay cả file khi lưu; bản lưu sau được giữ, bản trước còn trong lịch sử của hub |
-| Thay đổi trên đĩa từ công cụ bên ngoài | Phát hiện qua file watcher và gộp ba chiều với nội dung đang sửa |
-| Kiểu xuống dòng | Mỗi file dùng một kiểu (CRLF hoặc LF, theo kiểu chiếm đa số). Dòng có kiểu xuống dòng khác được chuyển về kiểu của file |
-| BOM UTF-8 | Được giữ nguyên |
+| File văn bản UTF-8 tối đa 1 MB | Theo từng thao tác, dùng OT. LAN Hub xếp thứ tự các thao tác |
+| File nhị phân hoặc lớn hơn 1 MB | Thay cả file khi lưu. Phiên bản trước còn trong lịch sử lượt chỉnh sửa |
+| Thay đổi trên ổ đĩa từ công cụ bên ngoài | Phát hiện qua file watcher và gộp ba chiều với nội dung đang sửa |
+| Kiểu xuống dòng | Mỗi file dùng một kiểu, CRLF hoặc LF theo kiểu chiếm đa số |
+| BOM UTF-8 | Giữ nguyên |
 | Mất kết nối khi VS Code vẫn mở | Thay đổi hai phía được gộp ba chiều khi kết nối lại |
-| Thay đổi khi extension không chạy | Lần kết nối sau: file chỉ đổi trên máy được gửi lên; file chỉ đổi trên hub được tải về; file đổi ở cả hai phía cần người dùng chọn |
-| Xoá file trong lúc người khác đang sửa | File được tạo lại, để không mất nội dung đang sửa |
-| Đổi tên file | Xử lý như xoá file cũ và tạo file mới, kể cả khi chỉ khác chữ hoa/thường |
+| Thay đổi khi extension không chạy | Lần kết nối sau, file chỉ đổi trên máy được gửi lên, file chỉ đổi trên LAN Hub được tải về, file đổi ở cả hai phía hiện trong bảng đồng bộ |
+| Xoá file khi thành viên khác đang sửa | File được tạo lại để không mất phần đang sửa |
+| Đổi tên file | Xử lý như xoá file cũ và tạo file mới, kể cả khi chỉ khác chữ hoa và chữ thường |
 
 ## Bảo mật
 
-- **Phạm vi sử dụng.** Kết nối giữa máy khách và hub **không được mã hoá**. Chỉ dùng trong mạng nội bộ tin cậy, hoặc qua VPN.
-- **Token.** Token là cơ chế chính để giới hạn quyền truy cập. Mã mời chứa token, vì vậy chỉ chia sẻ mã cho thành viên của nhóm.
-- **Danh sách tài khoản.** Mỗi dòng của `allowed-accounts-<PROJECT>.txt` là một tài khoản được vào phòng:
-  - định dạng: `github:<tên>`, `microsoft:<email>`, hoặc chỉ `<tên>`;
-  - dòng bắt đầu bằng `#` là chú thích;
-  - thay đổi có hiệu lực từ lần tham gia tiếp theo, không cần khởi động lại hub;
-  - tệp chỉ có chú thích thì mọi máy có token đều được vào.
-- **Giới hạn của danh sách tài khoản.** Hub không xác minh tài khoản với GitHub hay Microsoft: hub không cần Internet, và token đăng nhập không được gửi qua mạng. Vì vậy danh sách này ngăn truy cập nhầm, nhưng không ngăn một người có token cố tình khai báo tài khoản giả.
-- **Dữ liệu gửi đi.** Ngoài nội dung file, extension chỉ gửi:
-  - tên hiển thị;
-  - tên tài khoản (nếu có);
-  - vị trí con trỏ;
-  - trạng thái và tin nhắn chat.
-- **An toàn của panel chat.** Tin nhắn được hiển thị dưới dạng văn bản thuần, không được diễn giải như HTML.
-- **Kiểm tra đường dẫn.** Hub và extension đều từ chối đường dẫn ra ngoài thư mục dự án, cũng như các cách viết khác của cùng một tên trên Windows (tên ngắn 8.3 như `GIT~1`, tên kết thúc bằng dấu chấm hoặc khoảng trắng, `tên:luồng`, tên thiết bị như `CON`, `NUL`). Extension không nhận thay đổi từ hub cho các file mà máy đó loại trừ.
-- **Kết nối chưa đăng nhập.** Hub đóng kết nối không gửi lời chào hợp lệ trong 15 giây, hoặc gửi một thông điệp lớn hơn 64 KB trước khi đăng nhập.
+- **Mã hoá.** Mặc định kết nối trong mạng LAN không được mã hoá. Chỉ dùng trong mạng tin cậy, qua VPN, hoặc bật TLS. Khi bật TLS, mã mời mang vân tay chứng chỉ và extension kiểm tra vân tay trước khi gửi token.
+- **Token.** Token là cơ chế chính giới hạn truy cập. Mã mời chứa token, nên chỉ gửi mã mời cho thành viên trong nhóm. Đổi token ở tab **Truy cập** khi mã mời lọt ra ngoài.
+- **Danh sách tài khoản được phép.** LAN Hub không xác minh tài khoản với GitHub hay Microsoft, vì LAN Hub không cần Internet và extension không gửi token đăng nhập. Danh sách này ngăn vào nhầm, nhưng không ngăn một người có token khai báo tài khoản giả.
+- **Token trên máy thành viên** nằm trong kho bí mật của hệ điều hành qua SecretStorage của VS Code. Token từ LAN Collab 0.1 được chuyển vào đó ở lần chạy đầu.
+- **Dữ liệu extension gửi đi.** Ngoài nội dung file, extension chỉ gửi tên hiển thị, tên tài khoản nếu có, vị trí con trỏ, trạng thái và tin nhắn chat.
+- **Đường dẫn.** LAN Hub và extension từ chối đường dẫn ra ngoài thư mục dự án và các cách viết khác của cùng một tên trên Windows, như tên ngắn 8.3 `GIT~1`, tên kết thúc bằng dấu chấm, `tên:luồng`, hay tên thiết bị `CON`, `NUL`.
+- **Kết nối chưa đăng nhập.** LAN Hub đóng kết nối không gửi lời chào hợp lệ trong 15 giây, hoặc gửi thông điệp lớn hơn 64 KB trước khi đăng nhập.
+- **Quản trị từ xa** tắt theo mặc định. Khi bật, kênh quản trị dùng token riêng, bắt buộc TLS khi kết nối từ máy khác, và chặn một địa chỉ sau năm lần sai token trong một phút.
 
 ## Giới hạn đã biết
 
-- Ctrl+Z hoàn tác theo lịch sử editor của từng máy, vì vậy có thể hoàn tác cả thay đổi vừa nhận từ người khác ở cùng vị trí.
+- Ctrl+Z hoàn tác theo lịch sử editor của từng máy, nên có thể hoàn tác cả thay đổi vừa nhận từ thành viên khác ở cùng vị trí. Muốn bỏ thay đổi của một thành viên thì dùng **Hoàn tác lượt chỉnh sửa này**.
 - Mỗi cửa sổ VS Code chỉ đồng bộ thư mục gốc đầu tiên của workspace.
-- Hub ghi thay đổi xuống đĩa sau mỗi 0,5 giây. Nếu máy chủ mất điện đột ngột, thay đổi trong khoảng thời gian đó có thể bị mất. Dừng hub bằng cách thông thường thì không mất dữ liệu.
-- Giao diện extension hiện chỉ có tiếng Việt.
-- File hoặc thư mục có tên dạng tên ngắn 8.3 (ví dụ `REPORT~1.TXT`), tên kết thúc bằng dấu chấm hoặc khoảng trắng, hay trùng tên thiết bị của Windows không được đồng bộ (xem mục Bảo mật).
-- Một file lớn hơn khoảng 300 MB không truyền được qua hub, vì nội dung file được gửi trong một thông điệp duy nhất.
+- LAN Hub ghi thay đổi xuống ổ đĩa sau mỗi 0,5 giây. Máy LAN Hub mất điện đột ngột có thể mất thay đổi trong khoảng đó. Thoát LAN Hub bình thường thì không mất.
+- Giao diện extension và ứng dụng LAN Hub chỉ có tiếng Việt.
+- File có tên dạng tên ngắn 8.3, tên kết thúc bằng dấu chấm hoặc khoảng trắng, hay trùng tên thiết bị của Windows không được đồng bộ.
+- File lớn hơn khoảng 300 MB không truyền được, vì nội dung file đi trong một thông điệp.
+- Bộ cài LAN Hub chưa được ký số, nên SmartScreen có thể cảnh báo.
+- Ảnh chụp file 10 phút một lần của LAN Collab 0.1 không còn được tạo và không được chuyển thành lượt chỉnh sửa. File cũ vẫn nằm trong `.lan-collab/history/`.
 
 ## Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
-| Thanh trạng thái báo mất kết nối | Kiểm tra từ máy khách: `Test-NetConnection <IP> -Port 8200` (Windows) hoặc `nc -vz <IP> 8200`. Nếu thất bại, kiểm tra hub đang chạy và tường lửa |
-| "Sai lanCollab.token." | Token khác với `hub/token-<PROJECT>.txt`. Lấy mã mời mới hoặc sửa `lanCollab.token` |
-| "Hub này phục vụ dự án …" | `lanCollab.project` không khớp tham số `--project` của hub |
-| "Tài khoản … chưa được phép vào." | Thêm dòng được gợi ý trong thông báo vào tệp danh sách tài khoản |
-| Không thấy tài khoản trong danh sách chọn | Đăng nhập GitHub hoặc Microsoft qua biểu tượng tài khoản của VS Code, rồi chạy lại lệnh chọn tài khoản |
-| Cần thêm chi tiết | `LAN Collab: Xem nhật ký`. Cửa sổ hub cũng ghi lại mọi lần kết nối, từ chối và lỗi |
+| Thanh trạng thái hiện **Mất kết nối** hoặc **Chưa kết nối được** | Chạy **LAN Collab: Chẩn đoán kết nối** và làm theo bảng [Từng lỗi và cách xử lý](#từng-lỗi-và-cách-xử-lý) |
+| Thành viên ở máy khác không kết nối được, máy LAN Hub thì được | Bấm **Mở tường lửa** trong ứng dụng LAN Hub. Mở `http://<IP>:8200/` từ máy thành viên |
+| Mã mời báo dành cho LAN Collab 0.1 | Lấy mã mời mới trong ứng dụng LAN Hub, tab **Mã mời** |
+| Máy LAN Hub đổi địa chỉ IP | Extension tự tìm lại LAN Hub qua UDP 8201. Nếu tường lửa chặn UDP 8201, dán mã mời mới |
+| Không thấy tài khoản khi chọn tài khoản | Đăng nhập GitHub hoặc Microsoft qua biểu tượng tài khoản của VS Code, rồi chạy **Chọn tài khoản VS Code** |
+| Mục **Lịch sử chỉnh sửa** báo LAN Hub chưa hỗ trợ | Dự án tắt lịch sử, hoặc thư mục dự án nằm trên ổ mạng mà SQLite không mở được. Xem tab **Nhật ký** của dự án |
+| Ứng dụng LAN Hub không mở cửa sổ | LAN Hub đang chạy ẩn trong khay hệ thống. Bấm biểu tượng LAN Hub ở khay |
+| Cần thêm chi tiết | **LAN Collab: Xem nhật ký** trên máy thành viên, tab **Nhật ký** trong ứng dụng LAN Hub |
 
 ## Phát triển
 
-```bash
-npm test             # OT, chat và danh sách tài khoản, mô phỏng ba máy (sửa đồng thời, ghi đĩa từ bên ngoài, mất kết nối)
-npm run test:vscode  # chạy trong VS Code thật với profile tạm (mở một cửa sổ VS Code trong khoảng một phút)
-npm run package:all  # đóng gói extension và hub vào dist/ (xem Đóng gói bản phát hành)
+Cần Node.js 22 trở lên và Rust theo `lanhub/rust-toolchain.toml` (bộ công cụ Windows GNU trên Windows).
+
+```
+npm ci
+cargo build -p lanhub-cli --release --manifest-path lanhub/Cargo.toml
+npm test
 ```
 
-Đặt biến môi trường `LAN_COLLAB_DEBUG=1` trước khi mở VS Code để extension ghi nhật ký ra console của extension host.
+| Lệnh | Việc làm |
+|---|---|
+| `npm test` | Kiểm thử Node, rồi bộ kiểm thử hộp đen `test/conformance/` chạy với `lanhub-cli` bản release |
+| `LANHUB_TLS=1 npm run test:conformance` | Bộ kiểm thử hộp đen kèm các ca TLS |
+| `npm run test:vscode` | Chạy trong VS Code thật với profile tạm, LAN Hub là `lanhub-cli` bản release |
+| `npm run build:webviews`, `npm run test:webviews`, `npm run check:webviews` | Build, vitest và svelte-check cho webview của extension |
+| `cargo test --workspace --manifest-path lanhub/Cargo.toml` | Kiểm thử Rust |
+| `npm run hub -- --config <file>` | Chạy `lanhub-cli` từ mã nguồn |
+| `npm run package` | Đóng gói extension vào `dist/lan-collab-<phiên bản>.vsix` |
+| `npm run package:hub` | Đóng gói bộ cài LAN Hub và `lanhub-cli` vào `dist/` |
+| `npm run package:all` | Cả hai |
+
+Kiểm thử tìm `lanhub-cli` ở `lanhub/target/release/`, hoặc ở `$CARGO_TARGET_DIR/release/` khi biến này được đặt. `LANHUB_CMD` trỏ kiểm thử tới bản build khác. Đặt `LAN_COLLAB_DEBUG=1` trước khi mở VS Code để extension ghi nhật ký ra console của extension host.
 
 | Đường dẫn | Nội dung |
 |---|---|
-| `lib/ot.js` | Operational Transformation (retain/insert/delete, compose, transform) và thuật toán diff Myers |
-| `lib/client-core.js` | Kết nối hub, trạng thái OT phía máy khách, đồng bộ ban đầu, kết nối lại, theo dõi ổ đĩa |
-| `lib/editor-binding.js` | Kết nối tầng OT với editor của VS Code |
-| `lib/common.js` | Giao thức, loại trừ file, mã mời, tiện ích dùng chung |
-| `extension/extension.js` | Giao diện VS Code: con trỏ, danh sách thành viên, thanh trạng thái, tài khoản, mã mời |
-| `extension/chat-view.js`, `extension/webview/` | Panel chat |
-| `hub/hub.js` | Hub |
-| `hub/start-hub.bat`, `hub/start-hub.sh` | Script khởi động hub |
-| `tools/package-hub.js` | Tạo file `.zip` của hub |
-| `test/` | Kiểm thử tự động |
+| `lanhub/` | Cargo workspace của LAN Hub: `lanhub-ot`, `lanhub-protocol`, `lanhub-core`, `lanhub-cli`, ứng dụng Tauri trong `app/` |
+| `extension/src/` | Host của extension |
+| `extension/webview-src/` | Webview viết bằng Svelte: chat, thành viên, kết nối, lịch sử |
+| `extension/i18n/vi.json` | Mọi chuỗi giao diện của extension |
+| `lib/` | Mã dùng chung của client: OT, đồng bộ, máy trạng thái kết nối, chẩn đoán |
+| `packages/ui-kit/` | Token CSS và thành phần Svelte dùng chung cho extension và ứng dụng LAN Hub |
+| `packages/protocol/` | Kiểu TypeScript sinh từ `lanhub-protocol` |
+| `test/` | Kiểm thử Node, kiểm thử hộp đen và kiểm thử trong VS Code |
+| `tools/` | Lint câu chữ, máy tạo tải, đóng gói, điều khiển VS Code và LAN Hub qua CDP |
+| `docs/protocol.md` | Đặc tả giao thức |
+| `docs/copy-guide.md` | Quy tắc câu chữ |
 
 ## Giấy phép
 

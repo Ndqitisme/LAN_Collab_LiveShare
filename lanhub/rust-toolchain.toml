@@ -1,0 +1,5 @@
+# Pinned to the GNU host because this Windows machine has no MSVC build tools (link.exe).
+# Linux CI overrides it with RUSTUP_TOOLCHAIN=stable. Revisit at A7: Tauri releases need MSVC.
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"
+components = ["rustfmt", "clippy"]

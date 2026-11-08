@@ -1,7 +1,8 @@
 'use strict';
 
 // Starts a hub as a child process and talks to it only through its CLI, the protocol and its disk, so the
-// same tests run against any hub binary: LANHUB_CMD="<command>" overrides the default Node hub.
+// same tests run against any hub binary: LANHUB_CMD="<command>" overrides the default release lanhub-cli.
+const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -18,15 +19,23 @@ function splitCommand(cmd) {
 
 function hubCommand() {
   if (process.env.LANHUB_CMD) return splitCommand(process.env.LANHUB_CMD);
-  return [process.execPath, path.join(REPO, 'hub', 'hub.js')];
+  const target = process.env.CARGO_TARGET_DIR ? path.resolve(REPO, process.env.CARGO_TARGET_DIR) : path.join(REPO, 'lanhub', 'target');
+  const exe = path.join(target, 'release', process.platform === 'win32' ? 'lanhub-cli.exe' : 'lanhub-cli');
+  if (!fs.existsSync(exe)) {
+    throw new Error(`${exe} is not built. Run: cargo build -p lanhub-cli --release --manifest-path lanhub/Cargo.toml (or set LANHUB_CMD)`);
+  }
+  return [exe];
 }
 
-// opts: root, project, token, history, allowFile, exclude (array), discoveryPort, args (extra CLI arguments).
+// opts: root, project, token, history, allowFile, exclude (array), discoveryPort, port (default 0, any free port),
+// args (extra CLI arguments).
+// opts.config (a lanhub.toml path) replaces root for a hub with the multi-project feature.
 // Discovery is off unless discoveryPort is given, so parallel test files never fight over UDP 8201.
-// Resolves to {port, root, pid, logs(), stop()}.
+// Resolves to {port, root, pid, logs(), waitLog(re, ms), kill(), stop()}.
 function startHubProcess(opts) {
   const [cmd, ...pre] = hubCommand();
-  const args = [...pre, '--root', opts.root, '--port', '0', '--log-format', 'json', '--stop-on-stdin-close'];
+  const source = opts.config ? ['--config', opts.config] : ['--root', opts.root];
+  const args = [...pre, ...source, '--port', String(opts.port || 0), '--log-format', 'json', '--stop-on-stdin-close'];
   if (opts.project) args.push('--project', opts.project);
   if (opts.token) args.push('--token', opts.token);
   if (opts.history) args.push('--history', opts.history);
@@ -38,9 +47,11 @@ function startHubProcess(opts) {
   const child = spawn(cmd, args, { cwd: REPO, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
   const tail = [];
+  const watchers = new Set();
   const remember = (line) => {
     tail.push(line);
     if (tail.length > 40) tail.shift();
+    for (const w of watchers) w(line);
   };
   let stopping = false;
   let onListening = null;
@@ -89,6 +100,28 @@ function startHubProcess(opts) {
         root: opts.root,
         pid: child.pid,
         logs: () => [...tail],
+        // Resolves with the first log line from now on that matches re, or rejects after ms.
+        waitLog(re, ms = 5000) {
+          return new Promise((res, rej) => {
+            const w = (line) => {
+              if (!re.test(line)) return;
+              watchers.delete(w);
+              clearTimeout(timer);
+              res(line);
+            };
+            const timer = setTimeout(() => {
+              watchers.delete(w);
+              rej(new Error(`no log line matching ${re} within ${ms} ms:\n  ${tail.join('\n  ')}`));
+            }, ms);
+            watchers.add(w);
+          });
+        },
+        // A forced kill (TerminateProcess on Windows, SIGKILL elsewhere): nothing is flushed.
+        async kill() {
+          stopping = true;
+          child.kill('SIGKILL');
+          await exited;
+        },
         // Closing stdin asks the hub to write every pending file and exit 0.
         async stop() {
           stopping = true;
