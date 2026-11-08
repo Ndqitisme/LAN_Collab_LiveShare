@@ -4,26 +4,31 @@
 
 [Tiếng Việt](README.md) | English
 
-LAN Collab is a VS Code extension and a synchronization hub for local networks that lets several people edit one project in real time. Unlike session-sharing tools, every machine keeps a real copy of all project files. Each person can therefore run the program, use the debugger and use their own AI tools, while changes stay synchronized across all machines.
+LAN Collab lets several people edit one project in VS Code at the same time over the local network. Every machine keeps a real copy of every project file, so each member runs the program, the debugger, and their own AI tools locally while edits still reach the other machines at once.
 
-The hub is a dependency-free Node.js process. It runs on your own server (Windows, Linux or macOS) and needs no Internet access or third-party service.
+LAN Collab has two parts:
 
-The extension user interface is currently available in Vietnamese only.
+- **LAN Hub** is the sync server. The LAN Hub app runs on a Windows machine on the LAN and serves several projects on one port. The headless `lanhub-cli` runs the same configuration on Windows or Linux, including on an external server.
+- **The LAN Collab extension** for VS Code. A member pastes an invite code to join a project. The extension diagnoses its own connection problems and keeps a per-member history of edit runs.
+
+LAN Hub needs no Internet access and no third-party service.
+
+The user interface of the extension and of the LAN Hub app is Vietnamese. This README quotes each caption in Vietnamese, followed by its meaning.
 
 ## Contents
 
 - [Features](#features)
-- [Comparison](#comparison)
-- [Architecture](#architecture)
 - [Requirements](#requirements)
-- [Installing the hub](#installing-the-hub)
-- [Installing the extension](#installing-the-extension)
-- [Building release packages](#building-release-packages)
-- [Joining a project](#joining-a-project)
-- [Usage](#usage)
-- [Configuration reference](#configuration-reference)
-- [Working with Git](#working-with-git)
-- [Synchronization behavior](#synchronization-behavior)
+- [Install the LAN Hub app](#install-the-lan-hub-app)
+- [Run LAN Hub headless](#run-lan-hub-headless)
+- [Install the extension](#install-the-extension)
+- [Join a project with an invite code](#join-a-project-with-an-invite-code)
+- [Read the connection diagnosis](#read-the-connection-diagnosis)
+- [Use the edit-run history](#use-the-edit-run-history)
+- [Chat](#chat)
+- [Extension commands and settings](#extension-commands-and-settings)
+- [Work with Git](#work-with-git)
+- [How sync works](#how-sync-works)
 - [Security](#security)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
@@ -32,391 +37,391 @@ The extension user interface is currently available in Vietnamese only.
 
 ## Features
 
-- **Real-time concurrent editing.** Every edit reaches the other machines immediately. Several people editing the same file converge on the same content, using Operational Transformation (OT).
-- **Real files on every machine.** Every machine can run, debug and use its own AI tools. Changes written directly to disk by AI assistants, scripts or other tools are detected, merged with unsaved edits and synchronized.
-- **Team awareness:**
-  - remote cursors and selections in per-user colors, with names;
-  - a member list showing each person's file and line, active debug session and status;
-  - an activity log: join or leave, edit, create, delete, start or stop debugging;
-  - a follow mode that tracks one member's position.
-- **Built-in chat:**
-  - `@name` mentions, with a notification for the person mentioned;
-  - clickable `file:line` references; web links open in the browser;
-  - images (paste with Ctrl+V or pick a file), an emoji picker, `code` and ```code``` block formatting;
-  - unread counters;
-  - chat history stored on the hub.
-- **VS Code account identity.** The GitHub or Microsoft account already signed in to VS Code is used as the display name. The hub can restrict which accounts may join.
-- **Invite codes.** Paste a code to join; the whole project is downloaded into an empty folder with no configuration.
-- **Connection resilience:**
-  - editing continues while offline; on reconnection, both sides are merged three-way;
-  - edits made while the extension was not running (VS Code closed) are recognized on the next connection;
-  - for a file changed on both sides, the user chooses which version to keep.
-- **History and backups.** The hub keeps periodic snapshots of every file and a copy before each delete or overwrite. Clients back up local files before replacing them.
-
-## Comparison
-
-| | Live Share | Open Collaboration Tools | LAN Collab |
-|---|---|---|---|
-| Relay server | Microsoft service | Self-hostable | Self-hosted on the LAN |
-| Files on guest machines | Virtual file system | Virtual file system | Real files |
-| Guests run and debug on their own machine | No (they use the host's debug session) | No | Yes |
-| Command-line tools on guest machines can read project files | No | No | Yes |
-| Host must keep VS Code open | Yes | Yes | No (the hub runs on its own) |
-
-## Architecture
-
-```
- Machine A: VS Code + extension ─┐
- Machine B: VS Code + extension ─┼── TCP (default 8200) ── Hub (Node.js) ── Shared copy of the project
- Machine C: VS Code + extension ─┘                                        + history, chat
-```
-
-- **The hub** holds the shared copy of every file and orders and transforms concurrent changes. It then writes the files to disk and stores history and chat. The protocol is newline-delimited JSON over TCP.
-- **The extension** keeps a local copy of the project folder and connects it to the hub:
-  - for open files, it binds the editor to the OT layer;
-  - for files that are not open, it reads and writes them directly on disk;
-  - it watches the disk for external changes.
+- **Real-time concurrent editing.** Each keystroke reaches the other machines at once. Members who edit the same file converge on the same text through Operational Transformation (OT).
+- **Real files on every machine.** Changes that AI tools, scripts, or Git write straight to disk are detected, merged with unsaved edits, and synced.
+- **One LAN Hub, many projects.** Each project has its own token, allow list, and invite code. Adding, editing, or pausing one project does not interrupt the others.
+- **Self-diagnosing connection.** The extension tries every address of the LAN Hub in parallel and finds the LAN Hub again on the LAN when its address changes. When it cannot connect, it says which step failed and what to do.
+- **Edit-run history.** LAN Hub records each edit run of each member. A member views the text after a run next to the current file, copies from it, reverts only that run, or restores a deleted file.
+- **Team awareness.** Each member's cursor and selection in their own color, a member list with the file and line each member is on, an activity feed, and a follow mode.
+- **Chat inside VS Code.** `@name` mentions, clickable `file:line` references, images, and chat history kept on the LAN Hub.
+- **Survives disconnects.** Members keep editing while offline. On reconnect, both sides are merged three ways. Files changed on both sides are listed so the member picks which version to keep.
 
 ## Requirements
 
 | Component | Requirement |
 |---|---|
-| Hub | Node.js 18 or later; Windows, Linux or macOS; one TCP port reachable on the LAN |
-| Clients | VS Code 1.80 or later. Using the VS Code account as display name requires a VS Code version with the `authentication.getAccounts` API; older versions fall back to the machine name |
-| Building the extension | Node.js 18 or later and access to the npm registry (for `@vscode/vsce`) |
+| LAN Hub app | Windows 10 or 11, 64-bit. The installer installs WebView2 when the machine lacks it |
+| `lanhub-cli` | Windows 64-bit, or Linux x86_64 |
+| Extension | VS Code 1.80 or later |
+| Network | Member machines reach the LAN Hub machine on TCP port 8200. Finding the LAN Hub on the LAN uses UDP port 8201 |
 
-## Installing the hub
+Extension 0.2 works only with LAN Hub 0.2. A team on LAN Collab 0.1 follows the upgrade guide in [docs/upgrade-0.2.md](docs/upgrade-0.2.md) (Vietnamese).
 
-### Windows
+## Install the LAN Hub app
 
-1. Put the hub code on the server in one of two ways:
-   - extract `lan-collab-hub-<version>.zip`, taken from the Releases page or built yourself (see [Building release packages](#building-release-packages)), for example to `D:\lan-collab\`;
-   - or copy the repository's `hub` and `lib` folders, keeping their structure.
+Install the LAN Hub app on a machine that stays on in the LAN. That machine holds the hub copy of every project.
 
-   The hub needs both the `hub` and `lib` folders.
-2. Edit the first three settings of `hub\start-hub.bat`:
-   ```bat
-   set "PROJECT=MyProject"
-   set "ROOT=D:\lan-collab\workspaces\MyProject"
-   set "PORT=8200"
+### Install
+
+1. Download `LanHub_<version>_x64-setup.exe` from the repository's Releases page.
+2. Run the installer. It installs for the signed-in Windows user and needs no administrator rights.
+3. The installer is not code-signed, so Windows SmartScreen may block it. Click **More info**, then **Run anyway**.
+4. Start **LAN Hub** from the Start menu.
+
+On the first run, the window shows an empty project list with two buttons: **Thêm dự án** (add project) and **Nhập từ LAN Hub 0.1…** (import from LAN Hub 0.1). The configuration is stored in `%APPDATA%\LanHub\lanhub.toml`.
+
+### Add a project
+
+1. Click **Thêm dự án**.
+2. Enter **Tên dự án** (project name). Members see this name when they join.
+3. Click **Chọn thư mục…** (choose folder) and select the project's source folder. LAN Hub syncs every file in it except the exclude patterns.
+4. Keep **Phục vụ dự án** (serve the project) on. Keep **Quảng bá trong mạng LAN** (advertise on the LAN) on to show the project name when members look for a LAN Hub on the LAN.
+5. Click **Thêm dự án**.
+
+LAN Hub generates a random token for the project and starts serving it at once. Open the project to see its tabs:
+
+| Tab | Content |
+|---|---|
+| **Tổng quan** (overview) | Member count, file count, last activity, folder, state |
+| **Truy cập** (access) | The token (show, copy, rotate) and the allow list, one account per line as `github:name` or `microsoft:email`. An empty list lets every token holder in |
+| **Đồng bộ** (sync) | Exclude patterns, with a list of the files they match |
+| **Lịch sử** (history) | Limits of the edit-run history (idle time, days kept, maximum size) and **Dọn lịch sử ngay** (prune now) |
+| **Mã mời** (invite) | The `LC3-` invite code with a QR code and **Sao chép mã mời** (copy invite code) |
+| **Thành viên** (members) | Connected members, their IP address, open file, and latency |
+| **Nhật ký** (log) | The project log, with search, filters, and **Xuất nhật ký…** (export) |
+| **Cài đặt** (settings) | Rename, change the folder, pause, or **Xoá dự án** (delete). Deleting a project deletes no file |
+
+Rotating the token invalidates every earlier invite code of the project. Connected members need a new invite code.
+
+### Open the firewall
+
+Windows blocks connections from other machines to LAN Hub until a firewall rule allows them.
+
+1. In the LAN Hub app, click the gear icon **Cài đặt LAN Hub** (LAN Hub settings) at the top of the window.
+2. On the **Tường lửa Windows** (Windows firewall) card, click **Mở tường lửa** (open firewall).
+3. Windows asks for administrator rights once. Click **Yes**.
+
+The app adds the rule `LAN Hub TCP 8200` for the connection port and `LAN Hub UDP 8201` for LAN discovery, using the configured ports. The card shows the state of each port: open, not open, rule disabled, or blocked. **Sao chép lệnh** (copy command) copies the matching `netsh` commands to run by hand. Member machines need no open port.
+
+### Start at sign-in and the tray
+
+- On the **Khởi động** (startup) card of **Cài đặt LAN Hub**, turn on **Chạy LAN Hub khi đăng nhập Windows** (run LAN Hub at Windows sign-in). LAN Hub then runs hidden in the system tray and serves its projects without opening a window.
+- Closing the window minimizes LAN Hub to the tray, and it keeps serving. The tray menu opens the window, pauses or resumes each project, copies an invite code, and quits. **Thoát** (quit) writes every pending file before it stops.
+- One LAN Hub app runs per machine. Starting it again brings the running window forward.
+
+### LAN Hub settings
+
+**Cài đặt LAN Hub** applies changes as soon as you click **Lưu cài đặt** (save), with no restart:
+
+- **Tên LAN Hub**: the name members see. Blank means the computer name.
+- **Địa chỉ nhận kết nối** and **Cổng TCP**: the bind address and TCP port, `0.0.0.0` and `8200` by default.
+- **Cho máy khác tự tìm LAN Hub** and **Cổng UDP để tìm LAN Hub**: LAN discovery, on and `8201` by default.
+- **Địa chỉ công khai** (public address) and **Mã hoá kết nối bằng TLS** (TLS): for members who connect from outside the LAN. See [docs/lanhub-server.md](docs/lanhub-server.md).
+
+**Thêm LAN Hub từ xa** (add remote LAN Hub) manages a `lanhub-cli` on another machine the same way as the local LAN Hub. [docs/lanhub-server.md](docs/lanhub-server.md) explains how to turn on remote admin.
+
+### Check from a browser
+
+While LAN Hub runs, open `http://<LAN Hub machine IP>:8200/` in a browser on a member machine. The page shows the LAN Hub name, its version, and its advertised projects. If the page opens, the network and the firewall work and any remaining fault is on the extension side. A LAN Hub with TLS on still answers this page over `http://`.
+
+## Run LAN Hub headless
+
+`lanhub-cli` is LAN Hub without a window, for servers or for machines where you do not want the app. It reads the same `lanhub.toml` format as the app and applies the file again whenever it changes.
+
+1. Download `lanhub-cli-<version>-<platform>.zip` (Windows) or `lanhub-cli-<version>-x86_64-unknown-linux-gnu.tar.gz` (Linux) from the Releases page and extract it.
+2. Write `lanhub.toml` from the reference below.
+3. Check the configuration, the ports, and the firewall without changing anything:
+
    ```
-   `ROOT` is the folder that holds the shared copy of the project. It may be empty; the first client that joins will then upload the project.
-3. Open the port in the firewall (PowerShell as Administrator):
-   ```powershell
-   New-NetFirewallRule -DisplayName "LAN Collab 8200" -Direction Inbound -Protocol TCP -LocalPort 8200 -Action Allow
+   lanhub-cli --diagnose --config lanhub.toml
    ```
-4. Run `hub\start-hub.bat`. The window prints the token and one invite code per IPv4 address of the server:
+
+4. Start LAN Hub:
+
    ```
-   Token         : 5f0c...
-   ... LAN Collab hub — dự án "MyProject" — thư mục D:\lan-collab\workspaces\MyProject — cổng 8200 — 0 file
-   ... Mã mời (192.168.1.10): LC-AcCoAQog...
+   lanhub-cli --config lanhub.toml
    ```
-   Closing the window stops the hub. Pending changes are written to disk before it exits.
 
-### Linux and macOS
+   Each project logs one `Mã mời: LC3-...` line at start. Send that code to the members.
 
-```bash
-chmod +x hub/start-hub.sh
-PROJECT=MyProject ROOT=/srv/lan-collab/MyProject PORT=8200 ./hub/start-hub.sh
-```
+Without `--config`, `lanhub-cli` reads `%APPDATA%\LanHub\lanhub.toml` on Windows and `$XDG_CONFIG_HOME/lanhub/lanhub.toml` (by default `~/.config/lanhub/lanhub.toml`) on Linux. To run it as a systemd or Windows service, and to set up TLS, public addresses, and remote admin, follow [docs/lanhub-server.md](docs/lanhub-server.md) (Vietnamese).
 
-### Running directly
+### `lanhub.toml` reference
 
-```bash
-node hub/hub.js --root <folder> [--port 8200] [--host 0.0.0.0] [--project <name>] [--token <token>] \
-                [--allow-file <file>] [--history <folder>] [--exclude "pattern1,pattern2"]
-```
+A complete commented example is [`lanhub/examples/lanhub.toml`](lanhub/examples/lanhub.toml). A key that is not in this table is an error. Relative paths are relative to the folder of the file.
 
-| Option | Default | Meaning |
+| Key | Default | Meaning |
 |---|---|---|
-| `--root` | (required) | Folder holding the shared copy of the project |
-| `--port` | `8200` | TCP port |
-| `--host` | `0.0.0.0` | Listen address |
-| `--project` | name of the `--root` folder | Project name; clients must use the same name |
-| `--token` | environment variable `LAN_COLLAB_TOKEN` | Token required to connect; empty disables the check |
-| `--allow-file` | (none) | File listing the accounts allowed to join |
-| `--history` | `<root>/.lan-collab/history` | Folder for history and chat |
-| `--exclude` | (none) | Additional glob patterns that are never synchronized, comma-separated |
+| `[hub] name` | computer name | LAN Hub name that members see |
+| `[hub] bind` | `"0.0.0.0"` | Bind address |
+| `[hub] port` | `8200` | TCP port shared by every project |
+| `[hub] discovery` | `true` | Answer the extension when it looks for a LAN Hub on the LAN |
+| `[hub] discovery_port` | `8201` | UDP port for LAN discovery |
+| `[hub] public_address` | `[]` | Public host names or IP addresses. Invite codes list them first |
+| `[hub.tls] enabled` | `false` | Turn on TLS. Invite codes carry the certificate fingerprint |
+| `[hub.tls] cert`, `key` | none | An existing PEM certificate and key, always together. Without them LAN Hub generates a self-signed certificate once |
+| `[hub.admin] remote` | `false` | Turn on remote admin |
+| `[hub.admin] token`, `token_sha256` | none | Admin token (at least 16 characters) or its SHA-256. Set only one |
+| `[[project]] name` | required | Project name, compared without regard to case |
+| `[[project]] root` | required | Project folder |
+| `[[project]] enabled` | `true` | `false` pauses the project |
+| `[[project]] token` | `""` | Project token. An empty string lets every machine on the network join |
+| `[[project]] allow` | `[]` | Allow list. Empty lets every token holder in |
+| `[[project]] allow_file` | none | An allow-list file from LAN Collab 0.1, added to `allow` |
+| `[[project]] exclude` | `[]` | Exclude patterns, added to the defaults |
+| `[[project]] advertise` | `true` | Show the project name in LAN discovery |
+| `[project.history] enabled` | `true` | Record the edit-run history |
+| `[project.history] idle_minutes` | `15` | An edit run ends after this many minutes without an edit |
+| `[project.history] keep_days` | `30` | Older edit runs are deleted |
+| `[project.history] max_mb` | `2048` | Maximum history size of the project |
 
-### Running as a service
+Default exclude patterns: `.git`, `.lan-collab`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `*.lc-tmp`, `~$*`, `.DS_Store`, `Thumbs.db`.
 
-Windows, with [NSSM](https://nssm.cc/):
+## Install the extension
 
-```powershell
-nssm install LanCollab "C:\Program Files\nodejs\node.exe"
-nssm set LanCollab AppParameters "D:\lan-collab\hub\hub.js --root D:\lan-collab\workspaces\MyProject --port 8200 --project MyProject --allow-file D:\lan-collab\hub\allowed-accounts-MyProject.txt"
-nssm set LanCollab AppEnvironmentExtra LAN_COLLAB_TOKEN=<token>
-nssm start LanCollab
-```
+1. Download `lan-collab-<version>.vsix` from the Releases page.
+2. Install it from a terminal:
 
-Linux, with systemd (`/etc/systemd/system/lan-collab.service`):
+   ```
+   code --install-extension lan-collab-<version>.vsix
+   ```
 
-```ini
-[Unit]
-Description=LAN Collab hub
-After=network.target
+   Or in VS Code: **Extensions**, the `···` menu, **Install from VSIX…**.
 
-[Service]
-ExecStart=/usr/bin/node /opt/lan-collab/hub/hub.js --root /srv/lan-collab/MyProject --port 8200 --project MyProject --allow-file /opt/lan-collab/hub/allowed-accounts-MyProject.txt
-Environment=LAN_COLLAB_TOKEN=<token>
-Restart=on-failure
+The activity bar gets a **LAN Collab** icon. While not connected, the **Bắt đầu** (start) view links to **Thiết lập kết nối** (connection setup) and **Tham gia bằng mã mời** (join with invite code). The **Bắt đầu với LAN Collab** walkthrough in VS Code covers getting an invite code, joining, checking the connection, chat, and history.
 
-[Install]
-WantedBy=multi-user.target
-```
+To update, install the new `.vsix` the same way. VS Code replaces the old version.
 
-### Files created by the hub
+## Join a project with an invite code
 
-| File | Content |
+An invite code starts with `LC3-`. It holds every IPv4 address of the LAN Hub machine, the port, the project name, the token, and the certificate fingerprint when the LAN Hub uses TLS.
+
+1. Get an invite code from one of these places:
+   - The LAN Hub app: open the project, tab **Mã mời**, click **Sao chép mã mời**.
+   - The LAN Hub tray menu: **Sao chép mã mời**.
+   - A connected member: run **LAN Collab: Sao chép mã mời** (copy invite code).
+2. On the new machine, open an empty folder in VS Code, or no folder.
+3. Press `Ctrl+Shift+P`, run **LAN Collab: Tham gia bằng mã mời** (join with invite code), and paste the code.
+4. The extension checks the code with the LAN Hub before it writes any file.
+5. If the open folder is not empty, choose or create an empty folder for the project. VS Code opens it.
+6. The extension connects and downloads the whole project. The status bar shows **Đang đồng bộ** (syncing), then the member count once it is ready.
+
+A joined folder remembers its LAN Hub on that machine, so it connects by itself the next time it opens. The token is kept in the operating system's secret store, not in settings.
+
+Joining into a folder that already has files opens the sync panel before anything is written. The panel lists every file that differs from the hub copy. For each file, choose **Bản trên hub** (hub copy), **Bản trên máy này** (this machine's copy), or **Gộp** (merge), and use **So sánh** (compare) to see both. Replaced files are backed up to `.lan-collab/backup/`, and **LAN Collab: Khôi phục từ bản sao lưu** (restore from backup) brings them back.
+
+An invite code that starts with `LC-` comes from LAN Collab 0.1. Extension 0.2 does not read it and changes no file. Get a new invite code from the LAN Hub app.
+
+When an invite code is not available, open **LAN Collab: Thiết lập kết nối**. It accepts a pasted invite code, a LAN Hub found on the LAN, or an address, port, project, and token typed by hand.
+
+## Read the connection diagnosis
+
+### Status bar
+
+| Status bar text | Meaning |
 |---|---|
-| `hub/token-<PROJECT>.txt` | The token, generated once by the launcher. Delete it to rotate the token; all existing invite codes become invalid |
-| `hub/allowed-accounts-<PROJECT>.txt` | Accounts allowed to join (see [Security](#security)) |
-| `<root>/.lan-collab/hub.json` | Identifier of the shared copy. Do not delete it: clients use it to recognize the hub |
-| `<root>/.lan-collab/history/` | Per-file snapshots, at most one every 10 minutes, plus a copy before each delete or overwrite; `chat.jsonl` holds the chat history, `chat-media/` the images sent in chat |
+| `LAN Collab` | Not connected |
+| **Đang tìm LAN Hub**, **Đang kết nối**, **Đang đồng bộ** | Looking for the LAN Hub, connecting, syncing |
+| **4 thành viên** | Connected, syncing in real time, with 4 members |
+| **Mất kết nối** | Connection lost. Reconnecting after 1, 2, 5, 10, then 30 seconds. Edits on this machine are sent on reconnect |
+| **Chưa kết nối được** | Not connected yet in this session. The extension keeps retrying |
+| **Cần xử lý** | The LAN Hub refused the connection. The notification states the reason and offers a fix |
 
-The `.lan-collab` folder is never synchronized to clients.
+Click the status bar to open the LAN Collab menu.
 
-## Installing the extension
+### Connection diagnosis
 
-Download `lan-collab-<version>.vsix` from the repository's Releases page, or build it as described in [Building release packages](#building-release-packages).
+On each reconnect, the extension tries every known address in parallel. When no address answers, it looks for the LAN Hub on the LAN by the id in the invite code. If it finds the LAN Hub at a new address, it saves that address and connects.
 
-Install it in VS Code in either of two ways:
+When it still cannot connect, run **LAN Collab: Chẩn đoán kết nối** (diagnose connection), or click **Chẩn đoán** on the error notification or in the **Kết nối LAN Hub** panel. The command runs eight steps in order and marks each one as passed, fixed automatically, failed, or skipped:
 
-```bash
-code --install-extension dist/lan-collab-0.1.1.vsix
-```
+1. **Cấu hình thư mục**: the folder has a LAN Hub.
+2. **Kết nối tới địa chỉ đã biết**: tries every address in the invite code and the last address that worked, 3 seconds each.
+3. **Tìm LAN Hub trong mạng LAN**: looks for the LAN Hub over UDP when step 2 fails.
+4. **Đường mạng tới LAN Hub**: classifies the network error.
+5. **Vân tay TLS**: compares the LAN Hub certificate with the fingerprint in the invite code.
+6. **Phiên bản, dự án, token và tài khoản**: checks that the LAN Hub accepts this machine.
+7. **Thư mục dự án**: checks that the folder is writable and does not belong to another project.
+8. **Độ trễ tới LAN Hub**: measures the latency.
 
-or in VS Code: **Extensions** → `···` → **Install from VSIX…**
+**Sao chép báo cáo** (copy report) copies the results with the versions and network adapters, with the token and invite codes masked, to send to the LAN Hub administrator.
 
-After installation, the activity bar shows a **LAN Collab** icon with two views: **Đồng đội** (members) and **Chat**.
+### What each failure means
 
-To upgrade, install the newer `.vsix` the same way; VS Code replaces the previous version.
-
-## Building release packages
-
-A release consists of two files, both created in `dist/`:
-
-| File | For | Content |
+| Diagnosis result | Cause | What to do |
 |---|---|---|
-| `lan-collab-<version>.vsix` | Client machines | The VS Code extension |
-| `lan-collab-hub-<version>.zip` | The server | `hub/` (`hub.js`, `start-hub.bat`, `start-hub.sh`), `lib/` and `LICENSE`, under a top-level `lan-collab-hub/` folder |
+| The folder has no LAN Hub | The folder has not joined a project | Run **Tham gia bằng mã mời** |
+| LAN Hub is not running or the port is wrong | The LAN Hub machine refuses connections on that port | Open the LAN Hub app and check that the project runs. Check that the port in the invite code matches **Cổng TCP** of the LAN Hub |
+| The port does not answer within 3 seconds | The firewall on the LAN Hub machine blocks the port, the two machines are on different subnets, or a VPN is on | Click **Mở tường lửa** in the LAN Hub app. Turn off the VPN. Open `http://<IP>:8200/` in a browser to test the network |
+| This machine has no route to the address | The two machines are on different networks | Connect both machines to the same LAN and turn off the VPN |
+| No LAN Hub found on the LAN | LAN Hub is not running, LAN discovery is off, or a firewall blocks UDP 8201 | Check that LAN Hub runs and that the rule `LAN Hub UDP 8201` exists. Or paste a new invite code with the current address |
+| The folder has no LAN Hub id to search for | The folder was set up by hand and never connected | Paste a new invite code |
+| The TLS certificate differs from the fingerprint in the invite code | The LAN Hub changed its certificate, or another machine sits in between | The extension stops and never skips this check. Get a new invite code from the LAN Hub administrator |
+| The port accepts connections but does not speak the LAN Hub protocol | Another program uses that port | Check the address and port in the invite code |
+| LAN Hub refuses this machine's token | The token changed or the invite code is old | **Dán mã mời mới** (paste a new invite code) or **Nhập token** (enter token) |
+| LAN Hub has no such project | The project name is wrong, or the project was deleted or paused | **Chọn dự án** (choose a project) from the LAN Hub's list, or paste a new invite code |
+| LAN Hub accepts only accounts on the allow list | The project has an allow list and VS Code is not signed in | **Đăng nhập** (sign in) to GitHub or Microsoft in VS Code |
+| The account is not on the allow list | The LAN Hub administrator has not added it | **Sao chép dòng** (copy line) and send it to the LAN Hub administrator, who adds it on the **Truy cập** tab. Or **Đổi tài khoản** (switch account) |
+| LAN Hub uses a newer or older protocol version | The extension and the LAN Hub have different versions | Update the older side. Extension 0.2 needs LAN Hub 0.2 |
+| The folder is not writable | The folder is read-only | Grant write access or choose another folder |
+| The folder belongs to another LAN Hub's project | The folder is already bound to another LAN Hub | Choose an empty folder |
 
-`<version>` is taken from the `version` field of `package.json`.
+When a network step fails, the **Kết nối LAN Hub** panel also offers **Thử lại** (retry), **Tìm lại LAN Hub** (find the LAN Hub again), and **Hướng dẫn mở tường lửa** (firewall guide) with PowerShell commands for the LAN Hub machine.
 
-### Requirements
+## Use the edit-run history
 
-- Node.js 18 or later (with npm).
-- Access to the npm registry when building the `.vsix`. `npx` downloads `@vscode/vsce` on first use and keeps it in the npm cache.
-- The hub `.zip` is produced with Node.js built-in modules; no external archiver is needed.
+An edit run is one member's consecutive changes to one file. A run ends when another member edits the file, when its author stops editing for 15 minutes, when the file is deleted or renamed, or when LAN Hub stops. LAN Hub stores the file content at the start and the end of each run, with the source of the change: typed in the editor, written by a tool outside the editor, a revert, or a merge on reconnect.
 
-### Steps
+Open the **Lịch sử chỉnh sửa** (edit history) view in the LAN Collab sidebar, run **LAN Collab: Xem lịch sử chỉnh sửa**, or press `Ctrl+Alt+L`, then `H`. Choose **File đang mở** (open file) or **Toàn dự án** (whole project). Each row shows the author, the time, the source, and the characters added and removed. A run still in progress has the **Đang sửa** (editing) label.
 
-1. Get the source:
-   ```bash
-   git clone https://github.com/Ndqitisme/LAN_Collab_LiveShare.git
-   cd LAN_Collab_LiveShare
-   ```
-2. Run the tests (recommended before every release):
-   ```bash
-   npm test
-   ```
-3. Build:
+Select a run to get its actions:
 
-   | Command | Output |
-   |---|---|
-   | `npm run package` | `dist/lan-collab-<version>.vsix` |
-   | `npm run package:hub` | `dist/lan-collab-hub-<version>.zip` |
-   | `npm run package:all` | Both files |
+- **Mở bản sau lượt chỉnh sửa** (open the text after the run): opens the file as it was right after the run, read-only. Double-clicking the row does the same.
+- **So sánh với bản hiện tại** and **So sánh với bản trước đó** (compare with the current text, compare with the text before): open the VS Code side-by-side diff.
+- **Sao chép nội dung** (copy content): copies the whole text after the run. In the read-only window, select and copy any part.
+- **Hoàn tác lượt chỉnh sửa này** (revert this run): removes only that run's changes and keeps later changes, like `git revert`. The extension opens a preview, then asks for confirmation. The result syncs to every member and becomes a new edit run with the revert source. Parts that were edited again later stay as they are, and the confirmation counts them.
+- **Khôi phục file** (restore file): for a deletion run, creates the file again from its content at deletion.
+- **Khôi phục phiên bản này** (restore this version): for a binary file, replaces the current file with that version. The current version stays in the history.
 
-   Example output of `npm run package:all`:
-   ```
-   DONE  Packaged: dist\lan-collab-0.1.1.vsix (16 files, 124 KB)
-   Created dist\lan-collab-hub-0.1.1.zip (8 files)
-   ```
-4. Quick check:
-   - extension: `code --install-extension dist/lan-collab-<version>.vsix`, reload VS Code and confirm that the LAN Collab icon appears;
-   - hub: extract the `.zip` into a temporary folder and run `node lan-collab-hub/hub/hub.js --root <empty folder> --port 8200`; the hub prints its startup line and invite codes.
+The history lives in `.lan-collab/history/` in the project folder on the LAN Hub machine. By default it keeps 30 days and at most 2 GB per project. The LAN Hub administrator changes the limits on the **Lịch sử** tab.
 
-### Publishing on GitHub
+## Chat
 
-1. Increase `version` in `package.json` following [Semantic Versioning](https://semver.org/) and commit the change.
-2. Run `npm run package:all`.
-3. Create and push a tag:
-   ```bash
-   git tag v0.1.1
-   git push origin v0.1.1
-   ```
-4. On GitHub: **Releases** → **Draft a new release**, select the tag, attach both files from `dist/`, describe the changes and click **Publish release**.
+Open the **Chat** view in the LAN Collab sidebar, or press `Ctrl+Alt+L`, then `C`.
 
-The `dist/` folder is listed in `.gitignore`. Packages are distributed through Releases only and are not committed to the repository.
+- Enter sends and Shift+Enter starts a new line. A message holds up to 4000 characters.
+- Type `@` to pick a member to mention. The mentioned member gets a notification.
+- Any `path/to/file.ext:line` text opens that file at that line. A composer button inserts the file and line of the active editor.
+- Send PNG, JPEG, GIF, or WebP images up to 4 MB with Ctrl+V or the file picker. Large images are scaled down before sending.
+- Web links, `code`, code blocks, and an emoji picker are supported.
 
-## Joining a project
+Chat history is stored in the project's `.lan-collab/history/` on the LAN Hub machine.
 
-### With an invite code
+## Extension commands and settings
 
-An invite code looks like `LC-...`. It contains the hub address, port, project name and token.
-
-1. Get a code from either place:
-   - the hub window: pick the line whose IP address is on the clients' subnet;
-   - any machine already in the room: status-bar menu → **Sao chép mã mời** (copy invite code).
-2. On the new machine: `Ctrl+Shift+P` → **LAN Collab: Tham gia bằng mã** (join with code), then paste the code.
-3. The extension checks the code with the hub before changing any file.
-4. Select or create an empty folder. VS Code opens it, connects and downloads the whole project, with a progress indicator.
-
-A folder joined with a code remembers its hub on that machine and reconnects automatically when reopened.
-
-### Manual configuration
-
-Add to the project's `.vscode/settings.json`:
-
-```jsonc
-{
-  "lanCollab.server": "192.168.1.10:8200",
-  "lanCollab.project": "MyProject",
-  "files.saveConflictResolution": "overwriteFileOnDisk"
-}
-```
-
-Put the token in User settings (`Preferences: Open User Settings (JSON)`) so that it is not committed to the repository:
-
-```jsonc
-{ "lanCollab.token": "<token>" }
-```
-
-The extension merges external disk changes into the editor before saving. Setting `files.saveConflictResolution` to `overwriteFileOnDisk` is therefore safe for synchronized files. It also prevents VS Code's "file on disk is newer" dialog when a tool writes a file that still has unsaved changes.
-
-### First connection
-
-When a folder connects to a hub for the first time and the sync would change local files, the extension asks for confirmation. The dialog lists how many files will be:
-
-- downloaded;
-- overwritten;
-- uploaded;
-- deleted.
-
-No dialog appears when the connection only downloads files into an empty folder. Every overwritten or deleted file is backed up to `.lan-collab/backup/<timestamp>/`.
-
-## Usage
-
-| Element | Purpose |
+| Command | Meaning |
 |---|---|
-| Status bar | Number of people in the room, unread messages, connection state. Click it to open the menu |
-| **Đồng đội** view | Each member with `file:line`, debug session and status. Click a name to jump to that position; hover to see the account. **Hoạt động gần đây** is the room's activity log |
-| **Chat** view | Enter sends, Shift+Enter inserts a line break. Type `@` to pick a member to mention; `@all` mentions everyone. The buttons below the input insert an emoji, attach an image, or insert the `file:line` of the active editor. Images can be pasted with Ctrl+V; large images are scaled down to 1920 px on the long side before sending, with a 4 MB limit. Click an image to open it in the VS Code image viewer. Any `path/file.ext:line` text is clickable |
-| Editor | Other people's cursors and selections in their colors, with the name at the end of the line |
+| **LAN Collab: Tham gia bằng mã mời** | Join a project with an invite code |
+| **LAN Collab: Sao chép mã mời** | Copy the invite code of the open project |
+| **LAN Collab: Thiết lập kết nối** | Open the **Kết nối LAN Hub** panel |
+| **LAN Collab: Chẩn đoán kết nối** | Run the eight diagnosis steps |
+| **LAN Collab: Kết nối**, **Ngắt kết nối** | Connect or disconnect the open folder |
+| **LAN Collab: Xem lịch sử chỉnh sửa** | Open the edit history view |
+| **LAN Collab: Mở chat** | Open the chat view |
+| **LAN Collab: Đi theo thành viên**, **Thôi đi theo** | Follow a member's file and line, stop following |
+| **LAN Collab: Đặt trạng thái** | Set a status line that other members see |
+| **LAN Collab: Chọn tài khoản VS Code** | Pick the GitHub or Microsoft account used as the display name |
+| **LAN Collab: Khôi phục từ bản sao lưu** | Restore files from `.lan-collab/backup/` |
+| **LAN Collab: Xem nhật ký** | Open the "LAN Collab" Output channel |
+| **LAN Collab: Mở menu** | Open the LAN Collab menu, as the status bar does |
 
-### Commands
-
-| Command | Description |
-|---|---|
-| `LAN Collab: Tham gia bằng mã` | Join a room with an invite code |
-| `LAN Collab: Sao chép mã mời` | Copy the current room's invite code to the clipboard |
-| `LAN Collab: Kết nối` / `Ngắt kết nối` | Connect or disconnect the current folder |
-| `LAN Collab: Đi theo một người` / `Thôi đi theo` | Follow or stop following a member's position |
-| `LAN Collab: Đặt trạng thái (đang làm gì)` | Set a status line visible to the room |
-| `LAN Collab: Dùng tài khoản VS Code (GitHub/Microsoft)` | Choose the signed-in VS Code account used as display name |
-| `LAN Collab: Mở chat` | Open the Chat view |
-| `LAN Collab: Xem nhật ký` | Open the extension's Output channel |
-| `LAN Collab: Menu` | Combined menu (also opened from the status bar) |
-
-## Configuration reference
-
-| Setting | Default | Description |
+| Setting | Default | Meaning |
 |---|---|---|
-| `lanCollab.server` | `""` | Hub address as `IP:port`. Not needed for folders joined with an invite code |
-| `lanCollab.project` | `""` | Project name on the hub. The hub rejects a mismatching name |
-| `lanCollab.token` | `""` | Hub token. Recommended in User settings |
-| `lanCollab.name` | `""` | Display name. Empty: the VS Code account name, otherwise `os-user@hostname`. User settings only |
-| `lanCollab.autoConnect` | `true` | Connect automatically when a folder linked to a hub is opened |
-| `lanCollab.autoSave` | `true` | Save open files about 0.4 s after each change, so every machine's disk stays current |
-| `lanCollab.exclude` | `[]` | Additional glob patterns that are never synchronized, for example `["output.csv", "build/**"]` |
+| `lanCollab.server` | `""` | LAN Hub address as `IP:port`. Not needed for a folder joined with an invite code |
+| `lanCollab.project` | `""` | Project name on the LAN Hub |
+| `lanCollab.token` | `""` | LAN Hub token. At startup the extension moves it into the operating system's secret store and removes it from settings |
+| `lanCollab.name` | `""` | Display name. Blank means the VS Code account name, or `windows-user@computer` |
+| `lanCollab.autoConnect` | `true` | Connect when a folder bound to a LAN Hub opens |
+| `lanCollab.autoSave` | `true` | Save the open file about 0.4 seconds after each change, so the disk copy on every machine stays current |
+| `lanCollab.exclude` | `[]` | Glob patterns that are not synced, added to the defaults |
 
-Never synchronized by default: `.git`, `.lan-collab`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `~$*` (Microsoft Office lock files), `.DS_Store`, `Thumbs.db`. Patterns without `/` match at any depth. Exclude files that each machine generates when it runs the program (run output, build folders), so that the machines do not overwrite each other's results.
+Exclude files that each machine generates when it runs the program, such as output files and build folders, so the machines do not overwrite each other's results.
 
-## Working with Git
+## Work with Git
 
-The `.git` folder is not synchronized. Since all machines share the same working tree, one person performs the commit:
+The `.git` folder is not synced. Every machine has the same working tree, so one member commits:
 
-1. The committer runs `git add`, `git commit` and `git push` as usual.
-2. The other machines run `git fetch` and then `git reset origin/<branch>`, without `--hard`. This moves HEAD and the index to the new commit; the working tree already matches that commit.
+1. The committing member runs `git add`, `git commit`, and `git push` as usual.
+2. The other machines run `git fetch`, then `git reset origin/<branch>` without `--hard`. That command moves HEAD and the index to the new commit, because the working tree already matches it.
 
-Operations that change many files, such as `git checkout`, `git pull` or `git stash`, on one machine are synchronized to every machine. To work privately on another branch, disconnect first. On reconnection, files changed only on that machine are uploaded; files changed on both sides require a choice.
+`git checkout`, `git pull`, or `git stash` on one machine changes many files, and those changes sync to every machine. To work alone on another branch, disconnect first. On reconnect, files changed only on that machine are sent, and files changed on both sides appear in the sync panel for you to choose.
 
-## Synchronization behavior
+## How sync works
 
-| Data | Behavior |
+| Data | How it syncs |
 |---|---|
-| Text files (UTF-8, up to 1 MB) | Per edit, using OT, with the hub as the ordering authority |
-| Binary files or files larger than 1 MB | Whole file replaced on save; the later save is kept, the earlier version remains in the hub history |
-| Disk changes from external tools | Detected by the file watcher and merged three-way with the current content |
-| Line endings | Each file uses one style (CRLF or LF, whichever is more common). Lines with a different style are converted |
-| UTF-8 BOM | Preserved |
-| Connection lost while VS Code stays open | Both sides are merged three-way on reconnection |
-| Changes made while the extension was not running | On the next connection, files changed only locally are uploaded, files changed only on the hub are downloaded, and files changed on both sides require a choice |
-| File deleted while another person edits it | The file is recreated, so the edits are not lost |
-| Renames | Handled as delete plus create, including case-only renames |
+| UTF-8 text files up to 1 MB | Operation by operation, with OT. The LAN Hub orders the operations |
+| Binary files, or files over 1 MB | The whole file on save. Earlier versions stay in the edit-run history |
+| Disk changes by outside tools | Detected by a file watcher and merged three ways with the unsaved text |
+| Line endings | One style per file, CRLF or LF, whichever the file uses most |
+| UTF-8 BOM | Kept |
+| Disconnect while VS Code stays open | Both sides are merged three ways on reconnect |
+| Changes while the extension is not running | On the next connect, files changed only locally are sent, files changed only on the LAN Hub are downloaded, and files changed on both sides appear in the sync panel |
+| File deleted while another member edits it | The file is created again so the edits are not lost |
+| File rename | Handled as a delete and a create, also when only the case changes |
 
 ## Security
 
-- **Scope.** Traffic between clients and the hub is **not encrypted**. Use it only on a trusted local network or over a VPN.
-- **Token.** The token is the primary access control. Invite codes contain the token, so share them only with members of the team.
-- **Account list.** Each line of `allowed-accounts-<PROJECT>.txt` is one account allowed to join:
-  - format: `github:<name>`, `microsoft:<email>`, or just `<name>`;
-  - lines starting with `#` are comments;
-  - changes apply from the next join, without restarting the hub;
-  - a file with only comments lets any client with the token join.
-- **Limits of the account list.** The hub does not verify accounts with GitHub or Microsoft: it needs no Internet access, and sign-in tokens are never sent over the network. The list therefore prevents accidental access, but not a token holder who deliberately claims a false account name.
-- **Data sent.** Apart from file contents, the extension sends only:
-  - the display name;
-  - the account name (if any);
-  - cursor positions;
-  - status and chat messages.
-- **Chat view safety.** Chat messages are rendered as plain text and never interpreted as HTML.
-- **Path checks.** Both the hub and the extension reject paths that leave the project folder, and other Windows spellings of the same name (8.3 short names such as `GIT~1`, names ending in a dot or a space, `name:stream`, device names such as `CON` and `NUL`). The extension ignores hub changes to files that its own machine excludes.
-- **Connections that have not signed in.** The hub closes a connection that sends no valid hello within 15 s, or a message larger than 64 KB before signing in.
+- **Encryption.** By default, connections on the LAN are not encrypted. Use LAN Collab only on a trusted network, over a VPN, or with TLS on. With TLS on, the invite code carries the certificate fingerprint, and the extension checks it before it sends the token.
+- **Token.** The token is the main access control. Invite codes contain the token, so send them only to team members. Rotate the token on the **Truy cập** tab when an invite code leaks.
+- **Allow list.** LAN Hub does not verify accounts with GitHub or Microsoft, because LAN Hub needs no Internet and the extension sends no sign-in token. The list stops accidental joins. It does not stop a token holder who claims a false account.
+- **Token on member machines.** The token is kept in the operating system's secret store through VS Code SecretStorage. Tokens from LAN Collab 0.1 move there on the first run.
+- **What the extension sends.** Besides file content, the extension sends only the display name, the account name if any, the cursor position, the status line, and chat messages.
+- **Paths.** LAN Hub and the extension refuse paths outside the project folder and other Windows spellings of one name, such as 8.3 short names like `GIT~1`, names that end with a dot, `name:stream`, and device names such as `CON` and `NUL`.
+- **Connections that never sign in.** LAN Hub closes a connection that sends no valid hello within 15 seconds, or a message over 64 KB before sign-in.
+- **Remote admin** is off by default. When it is on, the admin channel uses its own token, requires TLS from any other machine, and blocks an address after five wrong tokens in one minute.
 
 ## Known limitations
 
-- Undo (Ctrl+Z) follows each machine's local editor history, so it can also undo a change just received from another person at the same position.
-- Each VS Code window synchronizes only the first root folder of the workspace.
-- The hub writes changes to disk every 0.5 s. A sudden power loss on the server can lose the changes made in that interval. A normal shutdown of the hub loses nothing.
-- The user interface is in Vietnamese only.
-- Files or folders named like 8.3 short names (for example `REPORT~1.TXT`), names ending in a dot or a space, and Windows device names are not synchronized (see Security).
-- A file larger than about 300 MB cannot pass through the hub, because a file is sent as a single message.
+- Ctrl+Z undoes from each machine's own editor history, so it can undo a change just received from another member at the same place. To remove one member's change, use **Hoàn tác lượt chỉnh sửa này**.
+- Each VS Code window syncs only the first root folder of the workspace.
+- LAN Hub writes changes to disk every 0.5 seconds. A sudden power loss on the LAN Hub machine can lose the changes of that interval. A normal quit loses nothing.
+- The user interface of the extension and of the LAN Hub app is Vietnamese only.
+- Files with 8.3-style names, names that end with a dot or a space, or Windows device names are not synced.
+- Files over about 300 MB cannot be transferred, because a file travels in one message.
+- The LAN Hub installer is not code-signed, so SmartScreen may warn about it.
+- The 10-minute file snapshots of LAN Collab 0.1 are no longer made and are not converted to edit runs. The old files stay in `.lan-collab/history/`.
 
 ## Troubleshooting
 
-| Symptom | Action |
+| Symptom | What to do |
 |---|---|
-| Status bar shows "mất kết nối" (disconnected) | From the client run `Test-NetConnection <IP> -Port 8200` (Windows) or `nc -vz <IP> 8200`. If it fails, check that the hub is running and the firewall allows the port |
-| "Sai lanCollab.token." (wrong token) | The token differs from `hub/token-<PROJECT>.txt`. Get a new invite code or correct `lanCollab.token` |
-| "Hub này phục vụ dự án …" (project mismatch) | `lanCollab.project` does not match the hub's `--project` |
-| "Tài khoản … chưa được phép vào." (account not allowed) | Add the line suggested in the message to the account list |
-| No account offered in the account picker | Sign in with GitHub or Microsoft from the VS Code Accounts menu, then run the account command again |
-| More detail needed | `LAN Collab: Xem nhật ký`. The hub window also logs every connection, rejection and error |
+| The status bar shows **Mất kết nối** or **Chưa kết nối được** | Run **LAN Collab: Chẩn đoán kết nối** and follow [What each failure means](#what-each-failure-means) |
+| Members on other machines cannot connect, the LAN Hub machine can | Click **Mở tường lửa** in the LAN Hub app. Open `http://<IP>:8200/` from a member machine |
+| The invite code is reported as a LAN Collab 0.1 code | Get a new invite code from the LAN Hub app, tab **Mã mời** |
+| The LAN Hub machine changed its IP address | The extension finds the LAN Hub again over UDP 8201. If a firewall blocks UDP 8201, paste a new invite code |
+| No account appears when picking an account | Sign in to GitHub or Microsoft through the VS Code accounts icon, then run **Chọn tài khoản VS Code** |
+| The edit history view says the LAN Hub does not support it | History is off for the project, or the project folder is on a network drive where SQLite cannot open. Check the project's **Nhật ký** tab |
+| The LAN Hub app shows no window | LAN Hub runs hidden in the tray. Click its tray icon |
+| More detail is needed | **LAN Collab: Xem nhật ký** on the member machine, the **Nhật ký** tab in the LAN Hub app |
 
 ## Development
 
-```bash
-npm test             # OT, chat and account list, three-client simulation (concurrent edits, external disk writes, dropped connections)
-npm run test:vscode  # runs inside a real VS Code with a temporary profile (opens a VS Code window for about a minute)
-npm run package:all  # builds the extension and hub packages in dist/ (see Building release packages)
+You need Node.js 22 or later and the Rust toolchain from `lanhub/rust-toolchain.toml` (the Windows GNU toolchain on Windows).
+
+```
+npm ci
+cargo build -p lanhub-cli --release --manifest-path lanhub/Cargo.toml
+npm test
 ```
 
-Set the environment variable `LAN_COLLAB_DEBUG=1` before starting VS Code to make the extension log to the extension host console.
+| Command | What it does |
+|---|---|
+| `npm test` | Node tests, then the black-box suite in `test/conformance/` against the release `lanhub-cli` |
+| `LANHUB_TLS=1 npm run test:conformance` | The black-box suite with the TLS cases |
+| `npm run test:vscode` | Runs inside a real VS Code with a temporary profile, against the release `lanhub-cli` |
+| `npm run build:webviews`, `npm run test:webviews`, `npm run check:webviews` | Build, vitest, and svelte-check for the extension webviews |
+| `cargo test --workspace --manifest-path lanhub/Cargo.toml` | Rust tests |
+| `npm run hub -- --config <file>` | Runs `lanhub-cli` from source |
+| `npm run package` | Packages the extension as `dist/lan-collab-<version>.vsix` |
+| `npm run package:hub` | Packages the LAN Hub installer and `lanhub-cli` into `dist/` |
+| `npm run package:all` | Both |
+
+The tests start `lanhub-cli` from `lanhub/target/release/`, or from `$CARGO_TARGET_DIR/release/` when that variable is set. `LANHUB_CMD` points them at another build. Set `LAN_COLLAB_DEBUG=1` before starting VS Code to have the extension log to the extension host console.
 
 | Path | Content |
 |---|---|
-| `lib/ot.js` | Operational Transformation (retain/insert/delete, compose, transform) and Myers diff |
-| `lib/client-core.js` | Hub connection, client-side OT state, initial sync, reconnection, disk watching |
-| `lib/editor-binding.js` | Binding between the OT layer and the VS Code editor |
-| `lib/common.js` | Protocol framing, exclusion rules, invite codes, shared utilities |
-| `extension/extension.js` | VS Code user interface: cursors, member list, status bar, accounts, invite codes |
-| `extension/chat-view.js`, `extension/webview/` | Chat view |
-| `hub/hub.js` | The hub |
-| `hub/start-hub.bat`, `hub/start-hub.sh` | Hub launchers |
-| `tools/package-hub.js` | Builds the hub `.zip` |
-| `test/` | Automated tests |
+| `lanhub/` | The LAN Hub Cargo workspace: `lanhub-ot`, `lanhub-protocol`, `lanhub-core`, `lanhub-cli`, and the Tauri app in `app/` |
+| `extension/src/` | The extension host |
+| `extension/webview-src/` | Svelte webviews: chat, members, connection, history |
+| `extension/i18n/vi.json` | Every user-facing string of the extension |
+| `lib/` | Shared client code: OT, sync, the connection state machine, diagnosis |
+| `packages/ui-kit/` | CSS tokens and Svelte components shared by the extension and the LAN Hub app |
+| `packages/protocol/` | TypeScript types generated from `lanhub-protocol` |
+| `test/` | Node tests, black-box tests, and VS Code tests |
+| `tools/` | String lint, load generator, packaging, CDP control of VS Code and LAN Hub |
+| `docs/protocol.md` | The protocol specification |
+| `docs/copy-guide.md` | Rules for user-facing text |
 
 ## License
 
