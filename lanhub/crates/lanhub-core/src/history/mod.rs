@@ -38,6 +38,9 @@ pub use store::{Counters, Store};
 const RETENTION_EVERY: Duration = Duration::from_secs(3600);
 /// Jobs taken into one transaction at most.
 const BATCH: usize = 1024;
+/// Answers held for one commit at most. A batch of `history_blob` requests for a large file would
+/// otherwise hold every decompressed copy at once, outside any member's queue limit.
+const REPLY_BYTES_PER_COMMIT: usize = 16 * 1024 * 1024;
 pub const LIST_DEFAULT: usize = 50;
 pub const LIST_MAX: usize = 200;
 pub const CHECKPOINT_NAME_MAX: usize = 100;
@@ -384,6 +387,15 @@ fn apply_in_place(text: &mut Vec<u16>, op: &TextOperation) -> bool {
     true
 }
 
+fn reply_bytes(out: &[Reply]) -> usize {
+    out.iter()
+        .map(|r| match r {
+            Reply::To { line, .. } | Reply::All { line } => line.len(),
+            Reply::Changed { .. } => 0,
+        })
+        .sum()
+}
+
 fn fail(what: &str, e: impl std::fmt::Display) {
     log(format!("[LỖI] lịch sử: {what}: {e}"));
 }
@@ -417,39 +429,35 @@ impl Writer {
         }
     }
 
-    /// One transaction for the whole batch; answers go out after the commit. Returns true on `Stop`.
+    /// One transaction for the batch, split when its answers pass `REPLY_BYTES_PER_COMMIT`; answers go
+    /// out after the commit that covers them. Returns true on `Stop`.
     fn apply(&mut self, batch: Vec<Job>) -> bool {
         let mut out = Vec::new();
         let mut stop = false;
         let mut limits = None;
         let mut usage = Vec::new();
         let mut retain = Vec::new();
-        if let Err(e) = self.store.conn.execute_batch("BEGIN IMMEDIATE") {
-            fail("BEGIN", e);
-        }
+        let mut held = 0;
+        self.begin();
         for job in batch {
             match job {
                 Job::Stop => stop = true,
                 Job::Limits(l) => limits = Some(l),
                 Job::Usage { reply } => usage.push(reply),
                 Job::Retain { reply } => retain.push(reply),
-                job => self.job(job, &mut out),
+                job => {
+                    let before = out.len();
+                    self.job(job, &mut out);
+                    held += reply_bytes(&out[before..]);
+                    if held > REPLY_BYTES_PER_COMMIT {
+                        self.commit_and_send(&mut out);
+                        self.begin();
+                        held = 0;
+                    }
+                }
             }
         }
-        self.flush_dirty();
-        if let Err(e) = self.store.conn.execute_batch("COMMIT") {
-            fail("COMMIT", e);
-            let _ = self.store.conn.execute_batch("ROLLBACK");
-            // The rolled-back ids can be given again to other runs; later jobs of these runs are dropped.
-            for key in &self.batch_rows {
-                self.rows.remove(key);
-                self.dirty.remove(key);
-            }
-        }
-        self.batch_rows.clear();
-        for r in out {
-            let _ = self.replies.send(r);
-        }
+        self.commit_and_send(&mut out);
         if let Some(l) = limits.filter(|l| *l != self.limits) {
             self.limits = l;
             self.retention();
@@ -469,6 +477,29 @@ impl Writer {
             }
         }
         stop
+    }
+
+    fn begin(&self) {
+        if let Err(e) = self.store.conn.execute_batch("BEGIN IMMEDIATE") {
+            fail("BEGIN", e);
+        }
+    }
+
+    fn commit_and_send(&mut self, out: &mut Vec<Reply>) {
+        self.flush_dirty();
+        if let Err(e) = self.store.conn.execute_batch("COMMIT") {
+            fail("COMMIT", e);
+            let _ = self.store.conn.execute_batch("ROLLBACK");
+            // The rolled-back ids can be given again to other runs; later jobs of these runs are dropped.
+            for key in &self.batch_rows {
+                self.rows.remove(key);
+                self.dirty.remove(key);
+            }
+        }
+        self.batch_rows.clear();
+        for r in out.drain(..) {
+            let _ = self.replies.send(r);
+        }
     }
 
     fn usage(&self) -> HistoryUsage {
