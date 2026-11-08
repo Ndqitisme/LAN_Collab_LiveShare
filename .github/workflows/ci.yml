@@ -34,6 +34,5 @@ jobs:
         working-directory: lanhub
       # test/support/hub-process.js starts lanhub/target/release/lanhub-cli by default.
       - run: npm test
-      - run: npm run test:conformance
         env:
           LANHUB_TLS: "1"

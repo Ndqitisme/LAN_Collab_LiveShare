@@ -118,7 +118,7 @@
 
   "invite.copied": "Đã sao chép mã mời. Mã mời có chứa token, chỉ gửi cho thành viên trong nhóm.",
   "invite.legacy": "Không dùng được mã mời này. Mã mời bắt đầu bằng LC- chỉ dành cho LAN Collab 0.1. Lấy mã mời mới trong ứng dụng LAN Hub.",
-  "invite.noInstance": "Không sao chép được mã mời. Máy này chưa kết nối LAN Hub của thư mục này lần nào.",
+  "invite.noInstance": "Không sao chép được mã mời. Kết nối LAN Hub trước khi sao chép mã mời.",
 
   "sync.progress.title": "Đang đồng bộ {project}",
   "sync.progress.count": "{done}/{total} file",

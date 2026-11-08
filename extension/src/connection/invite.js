@@ -115,8 +115,11 @@ async function copyInvite(app) {
   const ips = Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => a.address);
   const known = [...new Set([conn.lastGood, ...conn.addresses].filter(Boolean))];
   const hosts = [...new Set(known.flatMap((h) => (['127.0.0.1', 'localhost', '::1'].includes(h) && ips.length ? ips : [h])))];
-  const { port, project, instanceId, tlsFingerprint } = conn;
-  // The instanceId comes with the first welcome, so a folder set up by hand has none until it connects once.
+  const { port, project, tlsFingerprint } = conn;
+  // A folder set up in settings stores no instanceId, so the live core's welcome supplies it. A folder that never
+  // connected has none at all.
+  const core = app.controller.core;
+  const instanceId = conn.instanceId || (core && core.instanceId) || null;
   if (!instanceId) {
     const connect = t('menu.connect');
     vscode.window.showWarningMessage(t('invite.noInstance'), connect).then((pick) => {
