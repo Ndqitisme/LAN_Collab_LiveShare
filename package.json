@@ -2,7 +2,7 @@
   "name": "lan-collab",
   "displayName": "LAN Collab",
   "description": "Chỉnh sửa cộng tác thời gian thực qua LAN Hub trong mạng nội bộ, không phụ thuộc dịch vụ đám mây. Mỗi máy làm việc trên bản sao file của dự án.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "ndqitisme",
   "author": {
     "name": "Ndqitisme"
