@@ -16,7 +16,7 @@ Extension 0.2 chỉ làm việc với LAN Hub 0.2, và LAN Hub 0.2 chỉ nhận 
 
 - Chọn thời điểm không ai đang sửa. Báo thành viên lưu file và chờ.
 - Ghi lại cổng hub 0.1 đang dùng, là dòng `set "PORT=..."` trong `start-hub.bat`. Mặc định là `8200`.
-- Lấy sẵn `LanHub_<phiên bản>_x64-setup.exe` và `lan-collab-<phiên bản>.vsix` của bản 0.2 từ trang Releases.
+- Lấy sẵn `LanHub_<phiên bản>_x64-setup.exe` (hoặc `LanHub_<phiên bản>_x64-offline-setup.exe` khi máy LAN Hub không có Internet) và `lan-collab-<phiên bản>.vsix` của bản 0.2 từ trang Releases.
 
 ## Bước 1. Dừng hub 0.1
 

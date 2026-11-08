@@ -17,7 +17,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LANHUB = path.join(ROOT, 'lanhub');
 const DIST = path.join(ROOT, 'dist');
 const MB = 1000 * 1000;
-const BUDGET = { setup: 15 * MB, cliZip: 10 * MB };
+// The offline installer carries the WebView2 standalone runtime installer, for machines without Internet.
+const BUDGET = { setup: 15 * MB, offlineSetup: 250 * MB, cliZip: 10 * MB };
 const dryRun = process.argv.includes('--dry-run');
 const windows = process.platform === 'win32';
 
@@ -132,11 +133,12 @@ const ver = version();
 const target = hostTarget();
 const names = {
   setup: `LanHub_${ver}_x64-setup.exe`,
+  offlineSetup: `LanHub_${ver}_x64-offline-setup.exe`,
   cliZip: `lanhub-cli-${ver}-${windows ? target : 'x86_64-pc-windows-msvc'}.zip`,
   cliTar: `lanhub-cli-${ver}-${windows ? 'x86_64-unknown-linux-gnu' : target}.tar.gz`,
   sums: 'SHA256SUMS',
 };
-const here = windows ? ['setup', 'cliZip', 'sums'] : ['cliTar', 'sums'];
+const here = windows ? ['setup', 'offlineSetup', 'cliZip', 'sums'] : ['cliTar', 'sums'];
 
 if (dryRun) {
   for (const [key, name] of Object.entries(names)) {
@@ -151,12 +153,18 @@ const written = [];
 run('cargo', ['build', '-p', 'lanhub-cli', '--release'], LANHUB);
 const license = fs.readFileSync(path.join(ROOT, 'LICENSE'));
 if (windows) {
-  run('npm', ['run', 'tauri', 'build'], path.join(LANHUB, 'app'));
   const bundle = path.join(LANHUB, 'target/release/bundle/nsis');
-  const built = fs.readdirSync(bundle).find((f) => f.endsWith(`_${ver}_x64-setup.exe`));
-  if (!built) throw new Error(`no ${ver} installer in ${bundle}`);
-  fs.copyFileSync(path.join(bundle, built), path.join(DIST, names.setup));
-  written.push('setup');
+  const copyInstaller = (key) => {
+    const built = fs.readdirSync(bundle).find((f) => f.endsWith(`_${ver}_x64-setup.exe`));
+    if (!built) throw new Error(`no ${ver} installer in ${bundle}`);
+    fs.copyFileSync(path.join(bundle, built), path.join(DIST, names[key]));
+    written.push(key);
+  };
+  run('npm', ['run', 'tauri', 'build'], path.join(LANHUB, 'app'));
+  copyInstaller('setup');
+  // Same binary, bundled again with the WebView2 runtime inside the installer.
+  run('npm', ['run', 'tauri', '--', 'bundle', '--bundles', 'nsis', '--config', 'src-tauri/tauri.offline.conf.json'], path.join(LANHUB, 'app'));
+  copyInstaller('offlineSetup');
   const exe = fs.readFileSync(path.join(LANHUB, 'target/release/lanhub-cli.exe'));
   fs.writeFileSync(path.join(DIST, names.cliZip), zip([['lanhub-cli/lanhub-cli.exe', exe], ['lanhub-cli/LICENSE', license]]));
   written.push('cliZip');

@@ -50,7 +50,7 @@ The user interface of the extension and of the LAN Hub app is Vietnamese. This R
 
 | Component | Requirement |
 |---|---|
-| LAN Hub app | Windows 10 or 11, 64-bit. The installer installs WebView2 when the machine lacks it |
+| LAN Hub app | Windows 10 or 11, 64-bit. The installer downloads WebView2 when the machine lacks it. Machines without Internet use the offline installer |
 | `lanhub-cli` | Windows 64-bit, or Linux x86_64 |
 | Extension | VS Code 1.80 or later |
 | Network | Member machines reach the LAN Hub machine on TCP port 8200. Finding the LAN Hub on the LAN uses UDP port 8201 |
@@ -63,7 +63,7 @@ Install the LAN Hub app on a machine that stays on in the LAN. That machine hold
 
 ### Install
 
-1. Download `LanHub_<version>_x64-setup.exe` from the repository's Releases page.
+1. Download `LanHub_<version>_x64-setup.exe` from the repository's Releases page. On a machine without Internet access, download `LanHub_<version>_x64-offline-setup.exe`, which carries WebView2.
 2. Run the installer. It installs for the signed-in Windows user and needs no administrator rights.
 3. The installer is not code-signed, so Windows SmartScreen may block it. Click **More info**, then **Run anyway**.
 4. Start **LAN Hub** from the Start menu.

@@ -5,7 +5,7 @@
 LAN Hub được viết lại thành ứng dụng Windows và bản headless `lanhub-cli`. Extension có quy trình kết nối, chẩn đoán và lịch sử lượt chỉnh sửa mới. Extension 0.2 và LAN Hub 0.1 không làm việc với nhau. Cách nâng cấp nằm trong [docs/upgrade-0.2.md](docs/upgrade-0.2.md).
 
 ### LAN Hub
-- Ứng dụng LAN Hub cho Windows thay cho `start-hub.bat` và `start-hub.sh`. Máy LAN Hub không cần Node.js.
+- Ứng dụng LAN Hub cho Windows thay cho `start-hub.bat` và `start-hub.sh`. Máy LAN Hub không cần Node.js. Máy không có Internet dùng bộ cài offline `LanHub_0.2.0_x64-offline-setup.exe`, bộ cài này có sẵn WebView2.
 - Một LAN Hub phục vụ nhiều dự án. Mỗi dự án có tên, thư mục, token và danh sách tài khoản được phép riêng, thêm và sửa ngay trong ứng dụng.
 - Trang chi tiết dự án có các thẻ Truy cập, Đồng bộ, Lịch sử, Mã mời, Thành viên và Nhật ký.
 - "Nhập từ LAN Hub 0.1…" đọc token và danh sách tài khoản từ thư mục hub cũ.

@@ -48,7 +48,7 @@ LAN Hub không cần Internet hay dịch vụ bên thứ ba.
 
 | Thành phần | Yêu cầu |
 |---|---|
-| Ứng dụng LAN Hub | Windows 10 hoặc 11, 64 bit. Bộ cài tự cài WebView2 khi máy chưa có |
+| Ứng dụng LAN Hub | Windows 10 hoặc 11, 64 bit. Bộ cài tự tải WebView2 khi máy chưa có. Máy không có Internet dùng bộ cài offline |
 | `lanhub-cli` | Windows 64 bit, hoặc Linux x86_64 |
 | Extension | VS Code 1.80 trở lên |
 | Mạng | Máy thành viên kết nối được tới máy chạy LAN Hub qua cổng TCP 8200. Tìm LAN Hub trong mạng LAN dùng cổng UDP 8201 |
@@ -61,7 +61,7 @@ Cài ứng dụng LAN Hub trên một máy luôn bật trong mạng LAN. Máy n�
 
 ### Cài đặt
 
-1. Tải `LanHub_<phiên bản>_x64-setup.exe` từ trang Releases của repository.
+1. Tải `LanHub_<phiên bản>_x64-setup.exe` từ trang Releases của repository. Máy không ra được Internet thì tải `LanHub_<phiên bản>_x64-offline-setup.exe`. Bộ cài này có sẵn WebView2.
 2. Chạy bộ cài. Bộ cài cài cho tài khoản Windows đang đăng nhập và không cần quyền quản trị.
 3. Bộ cài chưa được ký số, nên Windows SmartScreen có thể chặn. Bấm **Thông tin thêm** rồi **Vẫn chạy**.
 4. Mở **LAN Hub** từ menu Start.
