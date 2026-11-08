@@ -4,7 +4,7 @@
 // idle gap shortened with --history-idle-ms, a checkpoint, a delete, a hub stop or kill), sources and
 // `reverts`, blob runs, history_list paging, history_blob, history_changed (at most one per path per second),
 // checkpoints, and retention
-// applied from lanhub.toml. Skipped when the hub does not list history (the Node hub has none).
+// applied from lanhub.toml.
 const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -15,7 +15,7 @@ const zlib = require('zlib');
 const { test } = require('node:test');
 const C = require('../../lib/common');
 const { TextOperation } = require('../../lib/ot');
-const { startHubProcess, probeWelcome } = require('../support/hub-process');
+const { startHubProcess } = require('../support/hub-process');
 
 const IDLE_MS = 2000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -184,21 +184,7 @@ async function runsBecome(m, p, n, ms = 8000) {
   }
 }
 
-async function supportsHistory() {
-  const hub = await startHubProcess({ root: tmp('probe'), project: 'Probe' });
-  try {
-    const w = await probeWelcome(hub.port, { project: 'Probe' });
-    return w.features.includes('history');
-  } finally {
-    await hub.stop();
-  }
-}
-
 test('edit runs are recorded and served over the protocol', async (t) => {
-  if (!(await supportsHistory())) {
-    t.skip('the hub does not list history in welcome.features');
-    return;
-  }
   const root = tmp('root');
   const historyDir = path.join(root, '.lan-collab', 'history');
   const FILES = ['a.py', 'b.py', 'c.py', 'd.py', 'e.py', 'f.py', 'k.py', 'm.py', 'p.txt'];
@@ -425,11 +411,7 @@ test('edit runs are recorded and served over the protocol', async (t) => {
   }
 });
 
-test('retention from lanhub.toml keeps the newest run of each file and drops unreferenced blobs', async (t) => {
-  if (!(await supportsHistory())) {
-    t.skip('the hub does not list history in welcome.features');
-    return;
-  }
+test('retention from lanhub.toml keeps the newest run of each file and drops unreferenced blobs', async () => {
   const root = tmp('ret');
   const historyDir = path.join(root, '.lan-collab', 'history');
   for (const f of ['r.py', 's.py']) fs.writeFileSync(path.join(root, f), 'x\n');

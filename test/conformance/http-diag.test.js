@@ -1,6 +1,6 @@
 'use strict';
 
-// The HTTP diagnosis page (docs/protocol.md section 13.2), for a hub that lists http-diag in welcome.features: a
+// The HTTP diagnosis page (docs/protocol.md section 13.2): a
 // connection that opens with an HTTP request line gets one HTML page with the hub name, version and advertised
 // projects, then the hub closes it. A browser at http://<ip>:<port>/ tells a network fault from an extension fault.
 const assert = require('assert');
@@ -13,12 +13,10 @@ const { startHubProcess, probeWelcome } = require('../support/hub-process');
 
 const TOKEN = 'secret-token-5521';
 let hub;
-let features = [];
 
 before(async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lan-collab-http-'));
   hub = await startHubProcess({ root, project: 'Demo', token: TOKEN, args: ['--name', 'Phòng thử'] });
-  features = (await probeWelcome(hub.port, { project: 'Demo', token: TOKEN })).features || [];
 });
 
 after(async () => {
@@ -36,8 +34,7 @@ function request(port, raw) {
   });
 }
 
-test('GET / returns 200 with an HTML page naming the hub and its projects, then closes', async (t) => {
-  if (!features.includes('http-diag')) return t.skip('the hub does not list http-diag');
+test('GET / returns 200 with an HTML page naming the hub and its projects, then closes', async () => {
   const res = await request(hub.port, 'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n');
   const [head, body] = res.split('\r\n\r\n');
   assert.match(head, /^HTTP\/1\.1 200 OK\r\n/);
@@ -50,8 +47,7 @@ test('GET / returns 200 with an HTML page naming the hub and its projects, then 
   assert.ok(!res.includes(hub.root), 'never the folder');
 });
 
-test('any path gets the same page and the protocol still works on the port', async (t) => {
-  if (!features.includes('http-diag')) return t.skip('the hub does not list http-diag');
+test('any path gets the same page and the protocol still works on the port', async () => {
   // The uptime row may tick between the two requests.
   const page = async (line) => (await request(hub.port, `${line}\r\n\r\n`)).split('\r\n\r\n')[1].replace(/<dd>[^<]*phút<\/dd>/, '');
   const a = await page('GET / HTTP/1.1');

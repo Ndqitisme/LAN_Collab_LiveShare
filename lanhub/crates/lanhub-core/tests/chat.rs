@@ -1,4 +1,4 @@
-//! Chat history loading, text normalization and the chat key, against what `hub/hub.js` does.
+//! Chat history loading, text normalization and the chat key, against what the former Node hub does.
 
 use lanhub_core::chat::{self, CHAT_KEEP};
 use lanhub_protocol::json::{JsStr, Json};

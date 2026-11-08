@@ -1,5 +1,5 @@
 //! The project actor: one task owns the files, their OT state, the members and the activity feed of a
-//! project, and handles every member message in arrival order. Handlers follow `hub/hub.js` line for line.
+//! project, and handles every member message in arrival order. Handlers follow the former Node hub line for line.
 //! Disk work goes to the project's IO thread; a handler that needs its result returns a continuation and
 //! the actor waits for it before the next message, keeping the Node hub's ordering.
 

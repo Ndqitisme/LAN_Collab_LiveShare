@@ -1,4 +1,4 @@
-//! The account allow list (docs/protocol.md section 3.3), as `accountRefusal` in `hub/hub.js`: one entry per
+//! The account allow list (docs/protocol.md section 3.3), as `accountRefusal` in the former Node hub: one entry per
 //! line, `#` starts a comment, matching ignores case and accepts `provider:label` or the bare label. A
 //! missing, unreadable or empty list lets every token holder in. The file is read on every hello, so an
 //! edit applies to the next join without a restart. `lanhub.toml` adds an inline list, judged together with the file.

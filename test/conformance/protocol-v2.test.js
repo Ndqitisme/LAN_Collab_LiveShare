@@ -1,8 +1,8 @@
 'use strict';
 
 // Protocol 2 as docs/protocol.md states it: coded errors and their order, probe_result, the welcome additions,
-// structured activity, pong.ts, presence rtt, and the 0.1 messages protocol 1 members still get from a hub that
-// accepts them. Every case talks raw NDJSON except the ones about lib/client-core.js rendering.
+// structured activity, pong.ts, presence rtt, and the legacy message a protocol 1 hello gets. Every case talks raw
+// NDJSON except the ones about lib/client-core.js rendering.
 const assert = require('assert');
 const fs = require('fs');
 const net = require('net');
@@ -86,7 +86,6 @@ function assertCodedError(m, code) {
 let open; // hub with a token, no allow list
 let gated; // hub with a token and an allow list
 let gatedAllow;
-let hubMin;
 
 before(async () => {
   gatedAllow = path.join(tmp('cfg'), 'allowed.txt');
@@ -95,8 +94,6 @@ before(async () => {
     startHubProcess({ root: tmp('open'), project: 'Demo', token: 'tk' }),
     startHubProcess({ root: tmp('gated'), project: 'Demo', token: 'tk', allowFile: gatedAllow }),
   ]);
-  const { m } = await refused(open.port, { proto: 3 });
-  hubMin = m.data && m.data.hubMin;
 });
 
 after(async () => {
@@ -108,7 +105,7 @@ test('protocol_version answers a proto the hub does not speak', async () => {
   const { m } = await refused(open.port, { proto: 3 });
   assertCodedError(m, 'protocol_version');
   assert.strictEqual(m.data.hubMax, 2);
-  assert.ok(Number.isInteger(m.data.hubMin) && m.data.hubMin >= 1 && m.data.hubMin <= 2);
+  assert.strictEqual(m.data.hubMin, 2);
 });
 
 test('handshake checks proto, then project, then token', async () => {
@@ -294,36 +291,10 @@ test('chat_rejected is coded for protocol 2', async () => {
   c.close();
 });
 
-test('protocol 1 hellos: 0.1 messages from a hub that accepts them, a legacy message otherwise', async () => {
-  const v1 = (hello) => ({ proto: 1, ...hello });
-  if (hubMin === 2) {
-    const { m } = await refused(open.port, v1({}));
-    assert.strictEqual(m.code, 'protocol_version');
-    assert.strictEqual(typeof m.message, 'string', 'a 0.1 client reads only message');
-    return;
-  }
-  assert.strictEqual((await refused(open.port, v1({ token: 'bad' }))).line, '{"t":"error","message":"Sai lanCollab.token.","code":""}');
-  assert.strictEqual((await refused(gated.port, v1({}))).m.code, 'account');
-  const old = await join(open.port, v1({ name: 'old' }));
-  assert.deepStrictEqual(Object.keys(old.welcome), ['t', 'id', 'color', 'hubId', 'session', 'project', 'files', 'applied', 'users', 'activity', 'features', 'key', 'exclude', 'chat']);
-  assert.deepStrictEqual(old.welcome.features, ['chat-image']);
-  assert.ok(old.welcome.activity.every((x) => typeof x.text === 'string' && !('kind' in x)));
-  const neu = await join(open.port, { name: 'neu' });
-  neu.send({ t: 'status', text: 'abc' });
-  await until(() => old.find((m) => m.t === 'activity' && m.a.who === 'neu' && m.a.text === 'đặt trạng thái: abc'), 'the 0.1 sentence');
-  assert.deepStrictEqual(Object.keys(old.find((m) => m.t === 'activity' && m.a.who === 'neu').a), ['ts', 'who', 'color', 'text']);
-  // rtt never reaches a 0.1 member, and a repeat that only refreshes rtt is not sent to it.
-  for (const rtt of [5, 6, 7]) neu.send({ t: 'presence', p: { file: 'a.txt', sel: [[0, 0]], line: 1, debug: null, rtt } });
-  neu.send({ t: 'presence', p: { file: 'b.txt', sel: [[0, 0]], line: 1, debug: null, rtt: 8 } });
-  await until(() => old.all('presence').some((m) => m.p.file === 'b.txt'), 'presence b.txt');
-  const seen = old.all('presence').filter((m) => m.id === neu.welcome.id);
-  assert.deepStrictEqual(seen.map((m) => m.p.file), ['a.txt', 'b.txt']);
-  assert.ok(seen.every((m) => !('rtt' in m.p)));
-  old.send({ t: 'ping' });
-  await until(() => old.find((m) => m.t === 'pong'), 'pong');
-  assert.strictEqual(old.lines.find((l) => l.includes('"pong"')), '{"t":"pong"}');
-  old.close();
-  neu.close();
+test('a protocol 1 hello gets the legacy message a 0.1 client reads', async () => {
+  const { m } = await refused(open.port, { proto: 1, token: 'bad' });
+  assert.strictEqual(m.code, 'protocol_version');
+  assert.strictEqual(typeof m.message, 'string', 'a 0.1 client reads only message');
 });
 
 function collab(port, name, extra = {}) {

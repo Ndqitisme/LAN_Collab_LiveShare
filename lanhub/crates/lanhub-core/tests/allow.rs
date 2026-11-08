@@ -1,4 +1,4 @@
-//! The allow list, judged as `accountRefusal` in `hub/hub.js` judges it.
+//! The allow list, judged as `accountRefusal` in the former Node hub judges it.
 
 use lanhub_core::allow;
 use lanhub_protocol::{Account, ErrorCode};

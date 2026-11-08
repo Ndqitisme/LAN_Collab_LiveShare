@@ -1,10 +1,9 @@
 'use strict';
 
-// The admin channel (docs/protocol.md section 13.3), for a hub that lists admin in welcome.features: a first
+// The admin channel (docs/protocol.md section 13.3): a first
 // message admin_hello with the admin token opens an admin session that carries admin_call and admin_result
 // messages with ids. A wrong token is answered after 1 s, five wrong tokens from one address within a minute
 // block it, plain TCP is refused from any address but loopback, and edits from a session land in lanhub.toml.
-// Skipped when the hub does not list admin (the Node hub has no admin channel).
 const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -124,20 +123,7 @@ async function hello(port, token, host) {
   return a;
 }
 
-let supported = null;
-async function adminSupported() {
-  if (supported !== null) return supported;
-  const root = tmp('probe');
-  const hub = await start({ root, project: 'Demo' });
-  const w = await probeWelcome(hub.port, { project: 'Demo' });
-  supported = w.features.includes('admin');
-  return supported;
-}
-
-const SKIP = 'the hub does not list admin in welcome.features';
-
-test('a correct token opens a session; wrong token, disabled channel and unknown calls are coded', async (t) => {
-  if (!(await adminSupported())) return t.skip(SKIP);
+test('a correct token opens a session; wrong token, disabled channel and unknown calls are coded', async () => {
   const off = await start({ root: tmp('off'), project: 'Demo' });
   const d = await hello(off.port, TOKEN);
   assert.deepStrictEqual(await d.next(), { t: 'admin_refused', code: 'disabled' });
@@ -163,8 +149,7 @@ test('a correct token opens a session; wrong token, disabled channel and unknown
   assert.ok(!hub.logs().some((l) => l.includes(TOKEN)), 'the token is never logged');
 });
 
-test('each AdminApi call answers over the session', async (t) => {
-  if (!(await adminSupported())) return t.skip(SKIP);
+test('each AdminApi call answers over the session', async () => {
   const hub = await start({ root: tmp('api'), project: 'Demo', token: 'member-token', args: ['--admin-token', TOKEN] });
   const a = await hello(hub.port, TOKEN);
   assert.strictEqual((await a.next()).t, 'admin_welcome');
@@ -218,8 +203,7 @@ test('each AdminApi call answers over the session', async (t) => {
   a.close();
 });
 
-test('five wrong tokens within a minute block the address before any token check', async (t) => {
-  if (!(await adminSupported())) return t.skip(SKIP);
+test('five wrong tokens within a minute block the address before any token check', async () => {
   const hub = await start({ root: tmp('limit'), project: 'Demo', args: ['--admin-token', TOKEN] });
   const tries = [];
   for (let i = 0; i < 5; i++) tries.push(hello(hub.port, `wrong-${i}-wrong-wrong-wrong`).then((a) => a.next()));
@@ -235,7 +219,6 @@ test('five wrong tokens within a minute block the address before any token check
 });
 
 test('plain TCP is refused from an address other than loopback; TLS from there opens the session', async (t) => {
-  if (!(await adminSupported())) return t.skip(SKIP);
   const lan = lanAddress();
   if (!lan) return t.skip('this machine has no IPv4 address besides loopback');
   const hub = await start({ root: tmp('plain'), project: 'Demo', args: ['--admin-token', TOKEN] });
@@ -254,8 +237,7 @@ test('plain TCP is refused from an address other than loopback; TLS from there o
   s.close();
 });
 
-test('project CRUD over the session writes the hub lanhub.toml', async (t) => {
-  if (!(await adminSupported())) return t.skip(SKIP);
+test('project CRUD over the session writes the hub lanhub.toml', async () => {
   const dir = tmp('crud');
   const config = path.join(dir, 'lanhub.toml');
   const first = path.join(dir, 'first');

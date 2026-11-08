@@ -7,7 +7,8 @@ const diagnostics = require('../../../lib/diagnostics');
 const config = require('../config');
 const joins = require('../connection/joins');
 const secrets = require('../connection/secrets');
-const { join, decodeAny, inviteProblem } = require('../connection/invite');
+const { decodeInviteV3 } = require('../../../lib/common');
+const { join, inviteProblem } = require('../connection/invite');
 const { runDiagnosis, environmentInfo } = require('../connection/diagnose');
 const { buildReport } = require('../connection/report');
 const { reasonText, runAction } = require('../connection/actions');
@@ -249,7 +250,7 @@ class ConnectionPanel {
       await join(this.app, code);
       return;
     }
-    await config.saveJoin(this.app.context, folder.uri, decodeAny(code), { host: null, instanceId: null });
+    await config.saveJoin(this.app.context, folder.uri, decodeInviteV3(code), { host: null, instanceId: null });
     await this._afterSave();
   }
 

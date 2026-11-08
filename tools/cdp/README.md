@@ -151,7 +151,7 @@ CLI, steps in the order given: `node tools/cdp/app.mjs [--config <lanhub.toml>] 
 ```js
 import fs from 'node:fs';
 import { launch } from './tools/cdp/vscode.mjs';
-// hub: node hub/hub.js --root C:/scratch/root --port 8299 --project Demo
+// hub: lanhub/target/release/lanhub-cli --root C:/scratch/root --port 8299 --project Demo
 const member = async (name) => {
   const folder = `C:/scratch/${name}`;
   fs.mkdirSync(`${folder}/.vscode`, { recursive: true });

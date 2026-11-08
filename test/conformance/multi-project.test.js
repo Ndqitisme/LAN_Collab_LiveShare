@@ -4,7 +4,6 @@
 // hello.project ignoring case, a token and a hubId per project, project_unknown listing only advertised
 // projects, no op crossing projects, hot add, disable and remove while members of the other projects keep
 // editing on the same connection, and a config with a syntax error leaving the running projects in place.
-// Skipped when the hub does not list multi-project (the Node hub has no --config).
 const assert = require('assert');
 const fs = require('fs');
 const net = require('net');
@@ -13,7 +12,7 @@ const path = require('path');
 const { test } = require('node:test');
 const C = require('../../lib/common');
 const { TextOperation } = require('../../lib/ot');
-const { startHubProcess, probeWelcome } = require('../support/hub-process');
+const { startHubProcess } = require('../support/hub-process');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), `lan-collab-multi-${n}-`));
@@ -181,22 +180,7 @@ function project(name, token, opts = {}) {
   return { name, token, root, ...opts };
 }
 
-async function supportsMultiProject() {
-  const hub = await startHubProcess({ root: tmp('probe'), project: 'Probe' });
-  try {
-    const w = await probeWelcome(hub.port, { project: 'Probe' });
-    return w.features.includes('multi-project');
-  } finally {
-    await hub.stop();
-  }
-}
-
 test('one hub serves several projects from a lanhub.toml', async (t) => {
-  if (!(await supportsMultiProject())) {
-    t.skip('the hub does not list multi-project in welcome.features');
-    return;
-  }
-
   await t.test('routing, tokens, hubIds and project_unknown', async () => {
     const dir = tmp('cfg');
     const file = path.join(dir, 'lanhub.toml');

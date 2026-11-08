@@ -3,13 +3,14 @@
 // The diagnosis report (extension/src/connection/report.js) never carries the token or an invite code, wherever
 // they appear in the step data. Run: node test/report.test.js
 const assert = require('assert');
-const { encodeInvite, encodeInviteV3 } = require('../lib/common');
+const { encodeInviteV3 } = require('../lib/common');
 const { buildReport, redact } = require('../extension/src/connection/report');
 const { STEPS } = require('../lib/diagnostics');
 
 const TOKEN = '5f0c9e"q\\x';
 const V3 = encodeInviteV3({ instanceId: 'I1', hosts: ['192.168.1.10'], port: 8200, project: 'Demo', token: TOKEN });
-const V2 = encodeInvite({ host: '192.168.1.10', port: 8200, project: 'Demo', token: 'abcdef' });
+// A 0.1 code a member may still paste somewhere.
+const V2 = 'LC-AcCoAQogCANfDJ5E4buxIMOhbg';
 
 const info = { time: '07/11/2026 10:00:00', extensionVersion: '0.2.0', vscodeVersion: '1.99.0', nodeVersion: '20.0.0', os: 'Windows_NT 10.0.19045 x64', interfaces: [{ name: 'Ethernet', address: '192.168.1.20', netmask: '255.255.255.0' }] };
 const target = { folder: 'C:\\work\\demo', project: 'Demo', port: 8200, addresses: ['192.168.1.10'], lastGood: null, instanceId: 'I1', tlsFingerprint: null, token: TOKEN };

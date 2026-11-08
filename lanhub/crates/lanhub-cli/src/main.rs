@@ -21,7 +21,7 @@ const USAGE: &str = "Dùng: lanhub-cli [--config lanhub.toml] [--port 8200] [--h
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// `parseArgs` of `hub/hub.js`: `--key=value`, `--key value`, or `--key` alone (followed by another
+/// `parseArgs` of the former Node hub: `--key=value`, `--key value`, or `--key` alone (followed by another
 /// `--flag` or nothing) meaning true. Anything else is ignored.
 fn parse_args(argv: &[String]) -> HashMap<String, Option<String>> {
     let mut out = HashMap::new();

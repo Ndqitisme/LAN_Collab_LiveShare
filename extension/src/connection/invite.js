@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { t } = require('../../../lib/i18n');
 const { ACTIVE } = require('../../../lib/connection-machine');
-const { encodeInvite, decodeInvite, encodeInviteV3, decodeInviteV3 } = require('../../../lib/common');
+const { encodeInviteV3, decodeInviteV3 } = require('../../../lib/common');
 const config = require('../config');
 const { probe } = require('./probe');
 
@@ -17,20 +17,13 @@ function isEmptyDir(p) {
   }
 }
 
-// Either code form as {instanceId, hosts, port, project, token, fingerprint?}; a legacy LC- code has one host and
-// no instanceId.
-function decodeAny(code) {
-  const v3 = decodeInviteV3(code);
-  if (v3) return v3;
-  const v2 = decodeInvite(code);
-  return v2 && { instanceId: null, hosts: [v2.host], port: v2.port, project: v2.project, token: v2.token };
-}
-
-// The input box message for a pasted code, or null when it decodes or nothing is typed yet.
+// The input box message for a pasted code, or null when it decodes or nothing is typed yet. An LC- code comes from
+// a 0.1 hub, which speaks protocol 1 only.
 function inviteProblem(value) {
   const code = String(value || '').replace(/\s+/g, '');
-  if (!code || decodeAny(code)) return null;
-  return /^LC3?-/.test(code) ? t('join.input.unreadable') : t('join.input.badPrefix');
+  if (!code || decodeInviteV3(code)) return null;
+  if (code.startsWith('LC-')) return t('invite.legacy');
+  return code.startsWith('LC3-') ? t('join.input.unreadable') : t('join.input.badPrefix');
 }
 
 // {inv, reached}: a decoded invite the hub accepts and the address that answered, or null after telling the
@@ -44,8 +37,11 @@ async function askInvite(app, codeArg, again) {
     validateInput: inviteProblem,
   });
   if (!code) return null;
-  const inv = decodeAny(code);
-  if (!inv) return null;
+  const inv = decodeInviteV3(code);
+  if (!inv) {
+    vscode.window.showErrorMessage(inviteProblem(code) || t('join.input.badPrefix'));
+    return null;
+  }
   const title = t('join.progress.probe', { host: inv.hosts[0], port: inv.port });
   const reached = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => probe(inv, app.log));
   if (reached.error) {
@@ -120,11 +116,17 @@ async function copyInvite(app) {
   const known = [...new Set([conn.lastGood, ...conn.addresses].filter(Boolean))];
   const hosts = [...new Set(known.flatMap((h) => (['127.0.0.1', 'localhost', '::1'].includes(h) && ips.length ? ips : [h])))];
   const { port, project, instanceId, tlsFingerprint } = conn;
-  const code = instanceId
-    ? encodeInviteV3({ instanceId, hosts, port, project, token, fingerprint: tlsFingerprint || undefined })
-    : encodeInvite({ host: hosts[0], port, project, token });
+  // The instanceId comes with the first welcome, so a folder set up by hand has none until it connects once.
+  if (!instanceId) {
+    const connect = t('menu.connect');
+    vscode.window.showWarningMessage(t('invite.noInstance'), connect).then((pick) => {
+      if (pick) app.controller.connect();
+    });
+    return;
+  }
+  const code = encodeInviteV3({ instanceId, hosts, port, project, token, fingerprint: tlsFingerprint || undefined });
   await vscode.env.clipboard.writeText(code);
   vscode.window.showInformationMessage(t('invite.copied'));
 }
 
-module.exports = { join, pasteInvite, copyInvite, decodeAny, inviteProblem };
+module.exports = { join, pasteInvite, copyInvite, inviteProblem };

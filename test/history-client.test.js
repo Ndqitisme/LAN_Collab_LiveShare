@@ -3,8 +3,8 @@
 // lib/history-client.js against a hub with edit-run history (docs/protocol.md section 12): runs of a file and of
 // the project, paging with `before`, blob fetch and its cache, `changed` events, and the three ways B7 writes
 // history back: a revert sent as one op with src "revert", a deleted file created again from its deletion run,
-// and an older blob version put back. Skipped when the hub does not list `history` (the Node hub).
-// Run: LANHUB_CMD=<lanhub-cli path> node test/history-client.test.js
+// and an older blob version put back.
+// Run: node test/history-client.test.js
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -62,10 +62,7 @@ async function main() {
     const bob = client('bob');
     await settled(alice);
     await settled(bob);
-    if (!alice.hasHistory()) {
-      console.log('history-client.test.js: skipped, the hub does not list history');
-      return;
-    }
+    assert.ok(alice.hasHistory(), 'welcome.features lists history');
     const history = new HistoryClient(alice);
     const changed = [];
     history.on('changed', (rel) => changed.push(rel));

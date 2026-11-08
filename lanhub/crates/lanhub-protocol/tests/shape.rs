@@ -1,4 +1,4 @@
-//! The JSON lines lanhub writes, compared with what `hub/hub.js` writes for the same message.
+//! The JSON lines lanhub writes, compared with what the former Node hub writes for the same message.
 
 use lanhub_ot::TextOperation;
 use lanhub_protocol::json::{self, JsNumber, JsStr, Json};

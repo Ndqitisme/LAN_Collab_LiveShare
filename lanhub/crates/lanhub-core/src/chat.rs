@@ -1,4 +1,4 @@
-//! Chat as `hub/hub.js` keeps it: the last messages in memory, every message appended to
+//! Chat as the former Node hub keeps it: the last messages in memory, every message appended to
 //! `<history>/chat.jsonl`, and images stored once under `<history>/chat-media/<sha1>.<ext>`. Messages stay
 //! parsed JSON, so history written by the Node hub is sent back unchanged.
 

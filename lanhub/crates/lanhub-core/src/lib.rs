@@ -1,4 +1,4 @@
-//! The LAN Hub server: many projects on one NDJSON-over-TCP port, at protocol 2 parity with `hub/hub.js`.
+//! The LAN Hub server: many projects on one NDJSON-over-TCP port, at protocol 2 parity with the former Node hub.
 //! A `Config` (from `lanhub.toml`, or built from the single-project flags) says what runs.
 
 pub mod admin;

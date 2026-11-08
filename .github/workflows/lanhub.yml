@@ -57,7 +57,7 @@ jobs:
         run: git diff --exit-code packages/protocol/src/generated && test -z "$(git status --porcelain packages/protocol/src/generated)"
 
   # The Linux lanhub-cli tarball of the release (plan A9); the Windows artifacts come from
-  # `npm run package:lanhub` on Windows.
+  # `npm run package:hub` on Windows.
   package-linux:
     runs-on: ubuntu-latest
     env:

@@ -1,4 +1,4 @@
-// Load generator: starts a hub (LANHUB_CMD or the Node hub) on a temp folder, connects N raw protocol clients,
+// Load generator: starts a hub (LANHUB_CMD or the release lanhub-cli) on a temp folder, connects N raw protocol clients,
 // creates one text file and has every client insert into it at a fixed rate. Prints one JSON line.
 // --chat N also sends N chat messages per second in total, round robin over the clients, and reports the time
 // from send to receipt over every member (the sender included).

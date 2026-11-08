@@ -108,15 +108,17 @@
   "connect.notConnected": "Chưa kết nối LAN Hub.",
 
   "join.error.connected": "Đang kết nối với dự án {project}. Ngắt kết nối trước khi tham gia dự án khác.",
-  "join.input.placeholder": "Dán mã mời bắt đầu bằng LC",
+  "join.input.placeholder": "Dán mã mời bắt đầu bằng LC3-",
   "join.input.prompt": "Mã mời có trong ứng dụng LAN Hub, hoặc lấy từ một thành viên của dự án.",
-  "join.input.badPrefix": "Mã mời không đúng định dạng. Mã mời bắt đầu bằng LC- hoặc LC3-.",
+  "join.input.badPrefix": "Mã mời không đúng định dạng. Mã mời bắt đầu bằng LC3-.",
   "join.input.unreadable": "Mã mời không đọc được. Sao chép lại toàn bộ mã mời.",
   "join.progress.probe": "Đang kiểm tra LAN Hub tại {host}:{port}",
   "join.folder.openLabel": "Chọn thư mục này",
   "join.folder.title": "Chọn hoặc tạo một thư mục trống cho dự án \"{project}\"",
 
   "invite.copied": "Đã sao chép mã mời. Mã mời có chứa token, chỉ gửi cho thành viên trong nhóm.",
+  "invite.legacy": "Không dùng được mã mời này. Mã mời bắt đầu bằng LC- chỉ dành cho LAN Collab 0.1. Lấy mã mời mới trong ứng dụng LAN Hub.",
+  "invite.noInstance": "Không sao chép được mã mời. Máy này chưa kết nối LAN Hub của thư mục này lần nào.",
 
   "sync.progress.title": "Đang đồng bộ {project}",
   "sync.progress.count": "{done}/{total} file",
@@ -369,7 +371,7 @@
   "connection.setup.hide": "Thu gọn",
   "connection.invite.title": "Dán mã mời",
   "connection.invite.label": "Mã mời",
-  "connection.invite.placeholder": "Dán mã mời bắt đầu bằng LC",
+  "connection.invite.placeholder": "Dán mã mời bắt đầu bằng LC3-",
   "connection.invite.submit": "Tham gia",
   "connection.hubs.title": "LAN Hub trong mạng LAN",
   "connection.hubs.rescan": "Tìm lại",
