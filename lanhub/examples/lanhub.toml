@@ -1,0 +1,40 @@
+# LAN Hub configuration. lanhub-cli reads %APPDATA%\LanHub\lanhub.toml on Windows and
+# $XDG_CONFIG_HOME/lanhub/lanhub.toml elsewhere, or the file given with --config. The hub re-reads the
+# file when it changes: a project that is added, changed, disabled or removed applies at once, and the
+# other projects keep running. A file with an error is logged and the running config stays.
+# Relative paths are taken from the folder of this file.
+
+[hub]
+name = "LAN Hub phòng phát triển"   # shown to clients; the computer name when left out
+bind = "0.0.0.0"
+port = 8200                         # one TCP port for every project
+discovery = true                    # answer LAN discovery on UDP discovery_port
+discovery_port = 8201
+# public_address = ["hub.example.com", "203.0.113.5"]   # external host: first in the invite code addresses
+
+[hub.tls]
+enabled = false                     # true: clients must use TLS; invite codes carry the certificate fingerprint
+# cert = 'tls\hub.pem'              # PEM chain and key; leave both out for a self-signed certificate that
+# key = 'tls\hub.key'               # is generated once in .lan-collab next to this file and reused
+
+[[project]]
+name = "MyProject"                  # clients join with this name; names ignore case
+root = 'D:\workspaces\MyProject'    # files, plus .lan-collab\ (hub.json, chat, history)
+enabled = true
+token = "5f0c9e"                    # "" lets anyone on the network join
+allow = ["github:alice", "microsoft:bob@example.com"]   # empty: every token holder
+# allow_file = 'allowed-accounts-MyProject.txt'          # a 0.1 allow list, added to `allow`
+exclude = ["build/**"]              # on top of the built-in patterns
+advertise = true                    # list the name in discovery replies and project_unknown
+
+[project.history]                   # edit runs in .lan-collab\history (docs/protocol.md section 12)
+enabled = true                      # false: no history; changing it restarts the project
+idle_minutes = 15                   # a run ends after this long without an edit by its author
+keep_days = 30                      # closed runs older than this are pruned
+max_mb = 2048                       # then the oldest runs until history fits; the newest run of a file stays
+
+[[project]]
+name = "Docs"
+root = 'D:\workspaces\Docs'
+token = "a17d3b"
+advertise = false

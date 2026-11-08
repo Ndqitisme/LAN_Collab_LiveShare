@@ -7,7 +7,7 @@ Drives VS Code (Electron) and, from A7, the LAN Hub app (WebView2) through the C
 | `cdp.mjs` | CDP client on Node's built-in `WebSocket`: targets, sessions, evaluate, input, screenshot. |
 | `vscode.mjs` | Launches VS Code with the extension under development and a debug port; module and CLI. |
 | `bridge/` | Dev-only helper extension that `vscode.mjs` loads next to the real one, so `runCommand` can call extension commands. Never packaged (`tools/**` is in `.vscodeignore`). |
-| `app.mjs` | Same verbs for the LAN Hub app. Exits with `LAN Hub app not built` until A7 builds it. |
+| `app.mjs` | Same verbs for the LAN Hub app, plus `invoke` for its Tauri commands. |
 | `record.mjs` | Screencast frames to `mp4` with `ffmpeg-static`; module and CLI. |
 | `cdp.test.mjs` | `node --test tools/cdp/cdp.test.mjs`: drives headless Edge on a local page. |
 
@@ -121,7 +121,18 @@ node tools/cdp/record.mjs [--seconds 10] [--out out.mp4] [--frame grab.png] [--p
 
 ## app.mjs
 
-`launch({ exe, port, args, env })` starts the LAN Hub app with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>` and attaches to its first page target. The executable is `LANHUB_APP_EXE`, or `LanHub.exe` under `lanhub/target/{release,debug}` or `lanhub/app/src-tauri/target/{release,debug}`. With none found it throws `LAN Hub app not built`. Verbs: `screenshot(path)`, `click(selector)`, `type(text)`, `press(key, modifiers)`, `evaluate(exprOrFn, args)`, `waitFor(exprOrFn, opts)`, `close()`. The app window is itself the webview, so there is no `webview()` or `runCommand()`. CLI: `node tools/cdp/app.mjs --shot out.png`. Until A7 this path is unproven against a real WebView2 app.
+`launch({ exe, config, port, args, env, timeout })` starts the LAN Hub app with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>`, attaches to its window and resolves once the app shell is mounted. `config` passes `--config <file>`, so a test never touches the real `%APPDATA%\LanHub\lanhub.toml`. The executable is `LANHUB_APP_EXE`, else the newest `LanHub.exe` under `lanhub/target/{release,debug}`; with none it throws `LAN Hub app not built`. Build it with `npm run tauri build -- --debug` (or without `--debug`) in `lanhub/app`. A plain `cargo build` or `cargo test` of the workspace writes a `LanHub.exe` that loads the UI from the Vite dev server instead, so copy the Tauri build elsewhere and point `LANHUB_APP_EXE` at it when tests run in between.
+
+| Verb | Does |
+|---|---|
+| `screenshot(path)`, `click(selector)`, `type(text)`, `press(key, modifiers)`, `evaluate(exprOrFn, args)`, `waitFor(exprOrFn, opts)` | As for VS Code, on the app window (the window is itself the webview). |
+| `invoke(cmd, args)` | Calls a Tauri command of the app, as the UI does, and resolves to its result. Debug builds also have `tray_action` with a tray menu id (`open`, `quit`, `pause:<project>`, `resume:<project>`, `invite:<project>`), because CDP cannot click the native tray menu. |
+| `waitExit(timeout)` | Resolves to the exit code once the process ends, for quit and single-instance checks. |
+| `close()` | Kills the process tree, WebView2 children included. |
+
+Fields: `pid`, `port`, `exe`, `startedAt` (ms, just before the spawn), `page`, `cdp`. The app runs a single instance, so a second `launch()` while one runs fails: the second process hands over to the first and exits.
+
+CLI, steps in the order given: `node tools/cdp/app.mjs [--config <lanhub.toml>] [--exe <LanHub.exe>] [--click <css>] [--type <text>] [--press <key>] [--eval <js>] [--wait <ms>] [--shot <file.png>] [--hold <seconds>]`.
 
 ## cdp.mjs
 

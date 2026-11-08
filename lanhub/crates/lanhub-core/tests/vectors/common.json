@@ -1,0 +1,641 @@
+{
+ "paths": [
+  {
+   "p": "GIT~1/hooks/pre-commit",
+   "rel": null
+  },
+  {
+   "p": ".git./hooks/x",
+   "rel": null
+  },
+  {
+   "p": "a.txt:stream",
+   "rel": null
+  },
+  {
+   "p": "docs/nul",
+   "rel": null
+  },
+  {
+   "p": "com0",
+   "rel": null
+  },
+  {
+   "p": "lpt9.txt",
+   "rel": null
+  },
+  {
+   "p": "GIT~1",
+   "rel": null
+  },
+  {
+   "p": "x.",
+   "rel": null
+  },
+  {
+   "p": "a.txt",
+   "rel": "a.txt"
+  },
+  {
+   "p": "dir/sub/file.py",
+   "rel": "dir/sub/file.py"
+  },
+  {
+   "p": "dir\\sub\\file.py",
+   "rel": "dir/sub/file.py"
+  },
+  {
+   "p": "a\\..",
+   "rel": null
+  },
+  {
+   "p": "/abs",
+   "rel": null
+  },
+  {
+   "p": "C:/x",
+   "rel": null
+  },
+  {
+   "p": "c:x",
+   "rel": null
+  },
+  {
+   "p": "z:",
+   "rel": null
+  },
+  {
+   "p": "1:/x",
+   "rel": null
+  },
+  {
+   "p": "",
+   "rel": null
+  },
+  {
+   "p": "a//b",
+   "rel": null
+  },
+  {
+   "p": "a/",
+   "rel": null
+  },
+  {
+   "p": "/",
+   "rel": null
+  },
+  {
+   "p": ".",
+   "rel": null
+  },
+  {
+   "p": "..",
+   "rel": null
+  },
+  {
+   "p": "a/./b",
+   "rel": null
+  },
+  {
+   "p": "a/../b",
+   "rel": null
+  },
+  {
+   "p": "...",
+   "rel": null
+  },
+  {
+   "p": ".a",
+   "rel": ".a"
+  },
+  {
+   "p": "a.b.c",
+   "rel": "a.b.c"
+  },
+  {
+   "p": "a ",
+   "rel": null
+  },
+  {
+   "p": " a",
+   "rel": " a"
+  },
+  {
+   "p": "a. ",
+   "rel": null
+  },
+  {
+   "p": "con",
+   "rel": null
+  },
+  {
+   "p": "CON",
+   "rel": null
+  },
+  {
+   "p": "Con.txt",
+   "rel": null
+  },
+  {
+   "p": "con.",
+   "rel": null
+  },
+  {
+   "p": "conx",
+   "rel": "conx"
+  },
+  {
+   "p": "console",
+   "rel": "console"
+  },
+  {
+   "p": "aux.tar.gz",
+   "rel": null
+  },
+  {
+   "p": "nul",
+   "rel": null
+  },
+  {
+   "p": "prn",
+   "rel": null
+  },
+  {
+   "p": "com1",
+   "rel": null
+  },
+  {
+   "p": "COM9.log",
+   "rel": null
+  },
+  {
+   "p": "com",
+   "rel": "com"
+  },
+  {
+   "p": "comA",
+   "rel": "comA"
+  },
+  {
+   "p": "lpt0",
+   "rel": null
+  },
+  {
+   "p": "lpt",
+   "rel": "lpt"
+  },
+  {
+   "p": "lpt10",
+   "rel": "lpt10"
+  },
+  {
+   "p": "LPT1.",
+   "rel": null
+  },
+  {
+   "p": "a<b",
+   "rel": null
+  },
+  {
+   "p": "a>b",
+   "rel": null
+  },
+  {
+   "p": "a\"b",
+   "rel": null
+  },
+  {
+   "p": "a|b",
+   "rel": null
+  },
+  {
+   "p": "a?b",
+   "rel": null
+  },
+  {
+   "p": "a*b",
+   "rel": null
+  },
+  {
+   "p": "a\tb",
+   "rel": null
+  },
+  {
+   "p": "a\u0001b",
+   "rel": null
+  },
+  {
+   "p": "a\u001fb",
+   "rel": null
+  },
+  {
+   "p": "ab",
+   "rel": "ab"
+  },
+  {
+   "p": "PROGRA~1",
+   "rel": null
+  },
+  {
+   "p": "ABCDEF~12",
+   "rel": null
+  },
+  {
+   "p": "ABCDEFG~1",
+   "rel": "ABCDEFG~1"
+  },
+  {
+   "p": "~1",
+   "rel": "~1"
+  },
+  {
+   "p": "A~",
+   "rel": "A~"
+  },
+  {
+   "p": "A~1.TXT",
+   "rel": null
+  },
+  {
+   "p": "A~1.TXTX",
+   "rel": "A~1.TXTX"
+  },
+  {
+   "p": "A~1.T.X",
+   "rel": "A~1.T.X"
+  },
+  {
+   "p": "A~1.",
+   "rel": null
+  },
+  {
+   "p": "A~1x",
+   "rel": "A~1x"
+  },
+  {
+   "p": "A~~1",
+   "rel": "A~~1"
+  },
+  {
+   "p": "a b~1",
+   "rel": null
+  },
+  {
+   "p": "🙂🙂🙂~1",
+   "rel": null
+  },
+  {
+   "p": "🙂🙂🙂🙂~1",
+   "rel": "🙂🙂🙂🙂~1"
+  },
+  {
+   "p": "A~1.🙂🙂",
+   "rel": "A~1.🙂🙂"
+  },
+  {
+   "p": "a <",
+   "rel": "a <"
+  },
+  {
+   "p": "a< ",
+   "rel": "a< "
+  },
+  {
+   "p": "\n\n",
+   "rel": "\n\n"
+  },
+  {
+   "p": "a\nb",
+   "rel": null
+  },
+  {
+   "p": "\r",
+   "rel": null
+  },
+  {
+   "p": "con. x",
+   "rel": "con. x"
+  },
+  {
+   "p": "x .",
+   "rel": "x ."
+  },
+  {
+   "p": "x. ",
+   "rel": "x. "
+  },
+  {
+   "p": "A~1. ",
+   "rel": null
+  },
+  {
+   "p": "Đề bài.docx",
+   "rel": "Đề bài.docx"
+  },
+  {
+   "p": "thư mục/tệp.txt",
+   "rel": "thư mục/tệp.txt"
+  },
+  {
+   "p": "a\u0000b",
+   "rel": null
+  }
+ ],
+ "exclude": [
+  {
+   "patterns": [
+    ".git",
+    ".lan-collab",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "*.pyc",
+    "*.lc-tmp",
+    "~$*",
+    ".DS_Store",
+    "Thumbs.db"
+   ],
+   "results": [
+    {
+     "rel": ".git",
+     "excluded": true
+    },
+    {
+     "rel": ".git/config",
+     "excluded": true
+    },
+    {
+     "rel": "src/.git/x",
+     "excluded": true
+    },
+    {
+     "rel": "node_modules/a/b.js",
+     "excluded": true
+    },
+    {
+     "rel": "a/node_modules",
+     "excluded": true
+    },
+    {
+     "rel": "x.pyc",
+     "excluded": true
+    },
+    {
+     "rel": "dir/x.PYC",
+     "excluded": true
+    },
+    {
+     "rel": "a.pyc.txt",
+     "excluded": false
+    },
+    {
+     "rel": "~$book.xlsx",
+     "excluded": true
+    },
+    {
+     "rel": "d/~$x",
+     "excluded": true
+    },
+    {
+     "rel": "Thumbs.db",
+     "excluded": true
+    },
+    {
+     "rel": "thumbs.DB",
+     "excluded": true
+    },
+    {
+     "rel": "a/.DS_Store",
+     "excluded": true
+    },
+    {
+     "rel": "venv/lib",
+     "excluded": true
+    },
+    {
+     "rel": "myvenv/x",
+     "excluded": false
+    },
+    {
+     "rel": ".venv",
+     "excluded": true
+    },
+    {
+     "rel": "__pycache__/m.cpython.pyc",
+     "excluded": true
+    },
+    {
+     "rel": "f.lc-tmp",
+     "excluded": true
+    },
+    {
+     "rel": "a.txt",
+     "excluded": false
+    },
+    {
+     "rel": ".lan-collab/hub.json",
+     "excluded": true
+    },
+    {
+     "rel": ".gitignore",
+     "excluded": false
+    },
+    {
+     "rel": "git",
+     "excluded": false
+    }
+   ]
+  },
+  {
+   "patterns": [
+    "output.csv",
+    " build/ ",
+    "./dist",
+    "docs/*.md",
+    "logs/**",
+    "**/tmp",
+    "a?c",
+    "deep/**/x.txt",
+    "Ñame",
+    "ǅx",
+    "",
+    "   ",
+    "data\\raw",
+    "é*"
+   ],
+   "results": [
+    {
+     "rel": "output.csv",
+     "excluded": true
+    },
+    {
+     "rel": "products/P1/output.csv",
+     "excluded": true
+    },
+    {
+     "rel": "build",
+     "excluded": true
+    },
+    {
+     "rel": "build/x",
+     "excluded": true
+    },
+    {
+     "rel": "src/build",
+     "excluded": true
+    },
+    {
+     "rel": "dist/a",
+     "excluded": true
+    },
+    {
+     "rel": "src/dist",
+     "excluded": true
+    },
+    {
+     "rel": "docs/a.md",
+     "excluded": true
+    },
+    {
+     "rel": "docs/sub/a.md",
+     "excluded": false
+    },
+    {
+     "rel": "DOCS/A.MD",
+     "excluded": true
+    },
+    {
+     "rel": "logs",
+     "excluded": false
+    },
+    {
+     "rel": "logs/a/b",
+     "excluded": true
+    },
+    {
+     "rel": "x/logs/a",
+     "excluded": false
+    },
+    {
+     "rel": "tmp",
+     "excluded": true
+    },
+    {
+     "rel": "a/b/tmp",
+     "excluded": true
+    },
+    {
+     "rel": "abc",
+     "excluded": true
+    },
+    {
+     "rel": "aXc",
+     "excluded": true
+    },
+    {
+     "rel": "a/c",
+     "excluded": false
+    },
+    {
+     "rel": "x/abc",
+     "excluded": true
+    },
+    {
+     "rel": "deep/x.txt",
+     "excluded": true
+    },
+    {
+     "rel": "deep/a/b/x.txt",
+     "excluded": true
+    },
+    {
+     "rel": "deepx.txt",
+     "excluded": false
+    },
+    {
+     "rel": "ñame",
+     "excluded": true
+    },
+    {
+     "rel": "ÑAME",
+     "excluded": true
+    },
+    {
+     "rel": "ǆx",
+     "excluded": true
+    },
+    {
+     "rel": "Ǆx",
+     "excluded": true
+    },
+    {
+     "rel": "data/raw/1",
+     "excluded": true
+    },
+    {
+     "rel": "ÉCOLE",
+     "excluded": true
+    },
+    {
+     "rel": "école",
+     "excluded": true
+    },
+    {
+     "rel": "a b/tmp",
+     "excluded": false
+    }
+   ]
+  }
+ ],
+ "eol": [
+  {
+   "text": "",
+   "out": ""
+  },
+  {
+   "text": "a",
+   "out": "a"
+  },
+  {
+   "text": "a\n",
+   "out": "a\n"
+  },
+  {
+   "text": "a\r\n",
+   "out": "a\r\n"
+  },
+  {
+   "text": "a\r\nb\n",
+   "out": "a\nb\n"
+  },
+  {
+   "text": "a\r\nb\r\nc\n",
+   "out": "a\r\nb\r\nc\r\n"
+  },
+  {
+   "text": "a\nb\nc\r\n",
+   "out": "a\nb\nc\n"
+  },
+  {
+   "text": "\r",
+   "out": "\r"
+  },
+  {
+   "text": "\r\r\n\n",
+   "out": "\r\n\n"
+  },
+  {
+   "text": "x\r\n\r\n\n",
+   "out": "x\r\n\r\n\r\n"
+  },
+  {
+   "text": "\n\r\n\r",
+   "out": "\n\n\r"
+  },
+  {
+   "text": "đ\r\n🙂\n🙂\r\n",
+   "out": "đ\r\n🙂\r\n🙂\r\n"
+  }
+ ]
+}

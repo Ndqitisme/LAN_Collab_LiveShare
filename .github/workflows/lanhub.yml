@@ -1,0 +1,72 @@
+name: lanhub
+
+on:
+  push:
+    paths:
+      - "lanhub/**"
+      - "lib/ot.js"
+      - "lib/common.js"
+      - "packages/protocol/**"
+      - "tools/gen-ot-vectors.mjs"
+      - "tools/package-lanhub.mjs"
+      - ".github/workflows/lanhub.yml"
+  pull_request:
+    paths:
+      - "lanhub/**"
+      - "lib/ot.js"
+      - "lib/common.js"
+      - "packages/protocol/**"
+      - "tools/gen-ot-vectors.mjs"
+      - "tools/package-lanhub.mjs"
+      - ".github/workflows/lanhub.yml"
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # lanhub/rust-toolchain.toml pins the Windows GNU host; Linux overrides it.
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            toolchain: stable
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    defaults:
+      run:
+        working-directory: lanhub
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt,clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Vectors match lib/ot.js
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: node tools/gen-ot-vectors.mjs && git diff --exit-code lanhub/crates/lanhub-ot/tests/vectors
+      - name: Core vectors match lib/common.js
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: node lanhub/crates/lanhub-core/tests/vectors/gen.mjs && git diff --exit-code lanhub/crates/lanhub-core/tests/vectors
+      - name: TypeScript types match lanhub-protocol
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: git diff --exit-code packages/protocol/src/generated && test -z "$(git status --porcelain packages/protocol/src/generated)"
+
+  # The Linux lanhub-cli tarball of the release (plan A9); the Windows artifacts come from
+  # `npm run package:lanhub` on Windows.
+  package-linux:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: node tools/package-lanhub.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanhub-cli-linux
+          path: dist/

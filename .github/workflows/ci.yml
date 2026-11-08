@@ -20,3 +20,28 @@ jobs:
       - run: npm run test:conformance
         env:
           LANHUB_CMD: node hub/hub.js
+
+  conformance-lanhub:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # lanhub/rust-toolchain.toml pins the Windows GNU host; Linux overrides it.
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            toolchain: stable
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - run: cargo build -p lanhub-cli --release
+        working-directory: lanhub
+      - run: npm run test:conformance
+        env:
+          LANHUB_CMD: ${{ github.workspace }}/lanhub/target/release/lanhub-cli
