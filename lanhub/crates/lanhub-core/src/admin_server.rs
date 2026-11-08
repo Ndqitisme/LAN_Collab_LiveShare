@@ -289,9 +289,13 @@ impl HubAdmin {
             AdminRequest::ApplyConfig { mut config } => {
                 // The admin settings and the state folder are the hub's own; a config sent over the
                 // channel carries neither, and must not switch the channel off by leaving them out.
+                // The command-line overrides win, as at every apply of the file.
                 let current = self.current().map_err(app)?;
                 config.hub.admin = current.hub.admin;
                 config.hub.state_dir = current.hub.state_dir;
+                if let AdminSource::File { adjust, .. } = &self.source {
+                    config = adjust(config);
+                }
                 value(self.registry.apply(config).await)
             }
             AdminRequest::RotateToken { name } => match &self.source {

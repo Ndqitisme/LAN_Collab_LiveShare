@@ -441,6 +441,12 @@ async fn wait_for_stop(stdin: bool) {
             let _ = tx.blocking_send(());
         });
     }
+    // A service hears CTRL_LOGOFF_EVENT whenever any user signs out; only the service control manager stops it.
+    #[cfg(windows)]
+    if service::active() {
+        service::STOP.notified().await;
+        return;
+    }
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(windows)]
     {
@@ -453,7 +459,6 @@ async fn wait_for_stop(stdin: bool) {
         tokio::select! {
             _ = ctrl_c => {}
             _ = rx.recv() => {}
-            _ = service::STOP.notified() => {}
             Some(_) = async { match brk.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
             Some(_) = async { match close.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}
             Some(_) = async { match logoff.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => {}

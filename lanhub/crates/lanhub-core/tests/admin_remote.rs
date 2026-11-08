@@ -34,6 +34,10 @@ fn folder(dir: &Path, name: &str) -> PathBuf {
 }
 
 async fn setup(tag: &str) -> Setup {
+    setup_with(tag, |c| c).await
+}
+
+async fn setup_with(tag: &str, adjust: fn(Config) -> Config) -> Setup {
     let dir = std::env::temp_dir().join(format!(
         "lanhub-admin-{tag}-{}",
         lanhub_core::util::random_hex::<6>()
@@ -49,7 +53,7 @@ async fn setup(tag: &str) -> Setup {
     let (hub, _) = Hub::start(cfg, "instance".into()).await.unwrap();
     hub.serve_admin(AdminSource::File {
         file: ConfigFile::new(file.clone()),
-        adjust: Box::new(|c: Config| c),
+        adjust: Box::new(adjust),
     })
     .await;
     let target = RemoteTarget {
@@ -193,5 +197,22 @@ async fn admin_remote_refuses_a_wrong_token_and_a_wrong_pin() {
     plain.fingerprint = None;
     let e = RemoteAdmin::connect(&plain, TOKEN).await.err().unwrap();
     assert_eq!(e.code, "remoteTlsOn", "a plain session to a TLS hub");
+    s.hub.registry().stop().await;
+}
+
+#[tokio::test]
+async fn admin_remote_apply_keeps_the_command_line_overrides() {
+    let s = setup_with("adjust", |mut c| {
+        c.hub.name = Some("Override".into());
+        c
+    })
+    .await;
+    let remote = RemoteAdmin::connect(&s.target, TOKEN).await.unwrap();
+    remote
+        .apply_config(config::load(&s.file).unwrap())
+        .await
+        .unwrap();
+    let again = RemoteAdmin::connect(&s.target, TOKEN).await.unwrap();
+    assert_eq!(again.info().hub_name, "Override");
     s.hub.registry().stop().await;
 }
