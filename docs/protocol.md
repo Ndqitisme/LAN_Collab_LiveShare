@@ -1,16 +1,16 @@
 # LAN Collab protocol 2
 
-This is the wire contract between a LAN Collab hub and its clients. The Node hub (`hub/hub.js`, until I1) and the Rust hub (`lanhub`) implement the hub side, and `lib/client-core.js` and the extension implement the client side. The black-box suite in `test/conformance/` checks a hub against this document. `docs/plans/README.md` section 5.4 records why each part looks the way it does.
+This is the wire contract between LAN Hub and its clients. `lanhub` (the LAN Hub app and the headless `lanhub-cli`, both built on `lanhub-core`) implements the hub side, and `lib/client-core.js` and the extension implement the client side. The black-box suite in `test/conformance/` checks a hub against this document. `docs/plans/README.md` section 5.4 records why each part looks the way it does.
 
-Words: **must** is required for conformance, **should** is expected unless there is a stated reason, **may** is optional. "Hub" alone means any hub. "Node hub" and "lanhub" name one implementation.
+Words: **must** is required for conformance, **should** is expected unless there is a stated reason, **may** is optional. "Hub" means any implementation of the hub side; "lanhub" names the Rust one. "Hub 0.1" is the Node.js hub of LAN Collab 0.1, which spoke protocol 1 and was removed in 0.2.
 
-Contents: [1 Transport](#1-transport) · [2 Paths, text and operations](#2-paths-text-and-operations) · [3 Handshake](#3-handshake) · [4 Errors and refusals](#4-errors-and-refusals) · [5 Client to hub](#5-client-to-hub) · [6 Hub to client](#6-hub-to-client) · [7 Activity](#7-activity) · [8 Presence and RTT](#8-presence-and-rtt) · [9 Features](#9-features) · [10 LAN discovery](#10-lan-discovery) · [11 Invite codes](#11-invite-codes) · [12 History](#12-history) · [13 lanhub-only transport features](#13-lanhub-only-transport-features) · [14 Protocol 1 compatibility](#14-protocol-1-compatibility) · [15 Client rendering](#15-client-rendering) · [16 CLI contract for tests](#16-cli-contract-for-tests)
+Contents: [1 Transport](#1-transport) · [2 Paths, text and operations](#2-paths-text-and-operations) · [3 Handshake](#3-handshake) · [4 Errors and refusals](#4-errors-and-refusals) · [5 Client to hub](#5-client-to-hub) · [6 Hub to client](#6-hub-to-client) · [7 Activity](#7-activity) · [8 Presence and RTT](#8-presence-and-rtt) · [9 Features](#9-features) · [10 LAN discovery](#10-lan-discovery) · [11 Invite codes](#11-invite-codes) · [12 History](#12-history) · [13 Transport features](#13-transport-features) · [14 Protocol 1 compatibility](#14-protocol-1-compatibility) · [15 Client rendering](#15-client-rendering) · [16 CLI contract for tests](#16-cli-contract-for-tests)
 
 ## 1. Transport
 
 - TCP, default port **8200**. One connection is one member, or one probe.
 - Framing is NDJSON: each message is one JSON object encoded as UTF-8 on one line ending with `\n` (LF). A sender must not put a raw LF inside a message (JSON escapes it). A receiver skips empty lines and lines that are not valid JSON, and keeps the connection.
-- Every message is an object with a string field `t`, its type. Field order carries no meaning, except in the protocol 1 compatibility rule of section 14.
+- Every message is an object with a string field `t`, its type. Field order carries no meaning.
 - Line length limits, counted in UTF-16 code units of the decoded line, as `String.length` in JavaScript:
   - Before the hello is accepted: **65 536** (64 Ki). A line still unterminated past this limit closes the connection.
   - After it: **419 430 400** (400 Mi, `MAX_LINE` in `lib/common.js`). Files travel inside one message as text or base64, so this limit is the largest file a hub accepts. A client must not send a longer line, because the hub drops the connection and resending after reconnect would loop.
@@ -53,7 +53,7 @@ The client opens the connection and sends `hello`. The hub answers with exactly 
 ### 3.2 Version selection
 
 - A hello whose `proto` is an integer of 2 or more follows this document.
-- Any other hello (proto 1, missing, not an integer) follows protocol 1, section 14. The Node hub answers it as hub 0.1.1 did. lanhub refuses it with the legacy message of section 14.2.
+- Any other hello (proto 1, missing, not an integer) comes from a protocol 1 client. lanhub refuses it with the legacy message of section 14.1.
 
 ### 3.3 Checks, in order
 
@@ -64,7 +64,7 @@ The hub checks the hello in this order and stops at the first failure. The order
 3. **token.** When the project has a token, `hello.token` must equal it exactly. Otherwise `token_invalid`.
 4. **account.** When the project has a non-empty allow list, `hello.account` must match an entry. Otherwise `account_required` (no account sent) or `account_denied` (account not in the list).
 
-Allow list rules (Node hub `--allow-file`, lanhub `allow` in `lanhub.toml`): one entry per line, `#` starts a comment, surrounding spaces are ignored, matching is case-insensitive, and an entry matches either `provider:label` or the bare `label`. A missing, unreadable or empty list lets every token holder in. The Node hub re-reads the file on every hello.
+Allow list rules (`allow` in `lanhub.toml`, or the file `--allow-file` names): one entry per line, `#` starts a comment, surrounding spaces are ignored, matching is case-insensitive, and an entry matches either `provider:label` or the bare `label`. A missing, unreadable or empty list lets every token holder in.
 
 ### 3.4 probe_result (hub to client)
 
@@ -77,7 +77,7 @@ A probe runs the same checks without joining. It is how "join by code" and the c
 | `token_ok` | boolean or null | Step 3, same convention. |
 | `account_ok` | boolean or null | Step 4, same convention. |
 | `account_error` | object | Only when `account_ok` is `false`: `{code, data}` exactly as the `error` a join would get (`account_required` or `account_denied`). |
-| `projects` | string array | Projects the hub advertises (section 10). The Node hub always lists its one project. |
+| `projects` | string array | Projects the hub advertises (section 10). |
 | `hubId` | string or null | The project's `hubId` (section 6.1) when `project_ok` is true, else `null`. |
 | `hubName` | string | The hub's display name. |
 | `instanceId` | string | The hub's instance id (section 6.1). |
@@ -98,11 +98,11 @@ There are two kinds of refusal, and they never mix.
 
 | `code` | `data` | Sent when |
 |---|---|---|
-| `protocol_version` | `{hubMin, hubMax}` integers | `hello.proto` is outside `hubMin`..`hubMax`. Node hub: `{1, 2}`. lanhub: `{2, 2}`. |
+| `protocol_version` | `{hubMin, hubMax}` integers | `hello.proto` is outside `hubMin`..`hubMax`. lanhub: `{2, 2}`. |
 | `project_unknown` | `{projects}` string array | No served project matches `hello.project`. `projects` lists the advertised projects, possibly empty. |
 | `token_invalid` | `{}` | The project has a token and `hello.token` differs. |
 | `account_required` | `{}` | The project has a non-empty allow list and the hello has no usable account. |
-| `account_denied` | `{account, entry, file?}` | The account matches no entry. `account` is `provider:label` as sent. `entry` is the line the administrator adds to let it in, today equal to `account`. `file` is optional: the Node hub sends the base name of its allow file so the client can name it; lanhub omits it. |
+| `account_denied` | `{account, entry, file?}` | The account matches no entry. `account` is `provider:label` as sent. `entry` is the line the administrator adds to let it in, today equal to `account`. `file` is optional, the base name of an allow file; lanhub does not send it. |
 | `tls_required` | `{}` | lanhub with TLS on received a plain TCP connection (section 13.1). |
 
 Example: `{"t":"error","code":"token_invalid","data":{}}`.
@@ -133,7 +133,7 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
 ### 5.1 op
 
 - `rev` is the revision the op was made against. `op` is relative to the file's text at that rev.
-- `seq` is the client's own counter for its ops. When present, the hub records the last `seq` it applied for this (`hello.uid`, path) and returns it in `welcome.applied` on the next join of the same uid. A client uses it after a reconnect to tell whether its unacknowledged op was applied before the link dropped. The Node hub forgets the entries of a uid that has had no connection for one hour.
+- `seq` is the client's own counter for its ops. When present, the hub records the last `seq` it applied for this (`hello.uid`, path) and returns it in `welcome.applied` on the next join of the same uid. A client uses it after a reconnect to tell whether its unacknowledged op was applied before the link dropped. The hub forgets the entries of a uid that has had no connection for one hour.
 - `src` says where the change came from. It is recorded, not enforced, and an unknown value counts as `editor`.
 
   | `src` | Meaning |
@@ -143,7 +143,7 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
   | `revert` | Produced by undoing one edit run (B7). Comes with `reverts`. |
   | `merge` | The client's unsent local changes merged into the hub's text after a reconnect or a resync (a three-way merge). `lib/client-core.js` sends it since P0-2. |
 
-- `reverts` is a string, the id of the edit run being undone. Sent only with `src: "revert"`. The Node hub ignores it. lanhub records it from A5 on.
+- `reverts` is a string, the id of the edit run being undone. Sent only with `src: "revert"`. The hub records it in the run (section 12.2).
 - When the path has no text file, the hub replies `nack {path}` (the path as sent). The client then recreates the file from its own text.
 - When `op` is not a valid operation, `rev` is not an integer, `rev` is older than the oldest kept op or newer than the current rev, or the op does not fit the text at `rev`, the hub replies `resync {path}`. The client fetches the file and merges.
 - Otherwise the hub transforms the op over every op applied since `rev`, applies it, replies `ack {path, rev}` with the new current rev, and sends `op {path, rev, op, by}` to every other member, where `rev` is the revision the transformed op applies to (new rev minus one) and `by` is the sender's connection id. Activity `edit` or `edit_disk` (throttled).
@@ -195,10 +195,10 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | This connection's member id (8 hex characters in the Node hub). Changes on every connection. |
+| `id` | string | This connection's member id (8 hex characters in lanhub). Changes on every connection. |
 | `color` | string | `#rrggbb` assigned to this member. |
 | `hubId` | string | The project's stable id, read from `<root>/.lan-collab/hub.json` field `id`, written on first start and never changed. Clients key their per-project state on it (`lanCollab.known:<hubId>` and friends), so a hub must keep the value hub 0.1 wrote, or every client syncs from scratch. |
-| `session` | string | Random per hub start (12 hex characters in the Node hub). A new value tells the client the hub restarted and revs restarted. |
+| `session` | string | Random per hub start (12 hex characters in lanhub). A new value tells the client the hub restarted and revs restarted. |
 | `project` | string | The project's name as the hub spells it. |
 | `files` | object | Manifest `{<path>: {kind, rev, hash}}` of every stored file. Blobs have `rev` 0. |
 | `applied` | object | `{<path>: seq}`, the last applied `seq` per path for this `hello.uid` (5.1). |
@@ -209,8 +209,8 @@ Messages a member may send after `welcome`. Before `welcome` only `hello` is val
 | `exclude` | string array | The hub's full exclude list (section 2). |
 | `chat` | array | The last 200 chat messages. |
 | `proto` | integer | 2. Added in protocol 2. |
-| `instanceId` | string | Stable id of the hub as a whole, the same for every project it serves. Discovery replies and invite v3 carry it so a client can find this hub again at a new address. The Node hub stores it as field `instance` in `<root>/.lan-collab/hub.json`, next to `id`; lanhub stores it in its config folder (`instance.json`). Added in protocol 2. |
-| `hubName` | string | Display name of the hub. The Node hub uses `--name`, else the host name. Added in protocol 2. |
+| `instanceId` | string | Stable id of the hub as a whole, the same for every project it serves. Discovery replies and invite v3 carry it so a client can find this hub again at a new address. lanhub stores it in its config folder (`instance.json`) when it serves a `lanhub.toml`, and as field `instance` in `<root>/.lan-collab/hub.json`, next to `id`, in single-project mode. Added in protocol 2. |
+| `hubName` | string | Display name of the hub: `[hub] name` or `--name`, else the host name. Added in protocol 2. |
 | `hubVersion` | string | Free-form version of the hub software, for diagnostics only. Clients must not branch on it; they use `features`. Added in protocol 2. |
 
 ### 6.2 User record
@@ -270,15 +270,15 @@ Because of the 5-second repeat, a client must not treat a presence whose `file`,
 
 `welcome.features` lists optional abilities. A client checks a feature before using it and degrades when it is missing. A hub lists only what works right now.
 
-| Feature | Meaning | Node hub | lanhub |
-|---|---|---|---|
-| `chat-image` | `chat.image` and `media` work. | yes | from A3 |
-| `discovery` | The hub answers UDP discovery (section 10). Absent when discovery is off or its port could not be bound. | when bound | from A3 |
-| `history` | The history messages of section 12 work. | no | from A5 |
-| `tls` | This connection is TLS (section 13.1). | no | from A6, on a TLS connection |
-| `http-diag` | The TCP port answers `GET ` with a diagnosis page (section 13.2). | no | from A6 |
-| `admin` | The port also serves the admin channel of section 13.3 (it may still be turned off). | no | from A10 |
-| `multi-project` | The hub serves several projects on this port, chosen by `hello.project`, each with its own token, allow list and `hubId`, and adds, changes or removes projects (from `lanhub.toml`) without restarting the others. `project_unknown` and `probe_result.projects` list only advertised projects. | no | from A4 |
+| Feature | Meaning | lanhub lists it |
+|---|---|---|
+| `chat-image` | `chat.image` and `media` work. | always |
+| `discovery` | The hub answers UDP discovery (section 10). | when discovery is on and its port is bound |
+| `history` | The history messages of section 12 work. | when the project's history store opened (section 12) |
+| `tls` | This connection is TLS (section 13.1). | on a TLS connection |
+| `http-diag` | The TCP port answers `GET ` with a diagnosis page (section 13.2). | always |
+| `admin` | The port also serves the admin channel of section 13.3 (it may still be turned off). | always |
+| `multi-project` | The hub serves several projects on this port, chosen by `hello.project`, each with its own token, allow list and `hubId`, and adds, changes or removes projects (from `lanhub.toml`) without restarting the others. `project_unknown` and `probe_result.projects` list only advertised projects. | always |
 
 ## 10. LAN discovery
 
@@ -290,7 +290,7 @@ A client that cannot reach any known address looks for the hub on the LAN over U
 
   `{"t":"lanhub_here","v":2,"instanceId":<string>,"hubName":<string>,"port":<integer>,"tls":<boolean>,"projects":<string array>}`
 
-  `port` is the hub's TCP port. `tls` says whether that port expects TLS. `projects` lists only projects with advertising on (`advertise = true` in `lanhub.toml`); lanhub omits the field when none is advertised. The Node hub always lists its one project. A reply never carries a token.
+  `port` is the hub's TCP port. `tls` says whether that port expects TLS. `projects` lists only projects with advertising on (`advertise = true` in `lanhub.toml`); lanhub omits the field when none is advertised. A reply never carries a token.
 - The client keeps the reply whose `instanceId` equals the one it stored (from `welcome` or the invite) and connects to the reply's source address on `port`.
 - A hub sends at most 20 replies per second to one source address, so the responder cannot be used to flood a third party with spoofed requests.
 - The firewall must allow inbound UDP on the discovery port. The LAN Hub app adds the rule (A9).
@@ -317,15 +317,15 @@ Decoding (`decodeInviteV3` in `lib/common.js`, normative) removes all whitespace
 
 Example: `{"v":3,"i":"0b6f2c7e-6f0e-4c3a-9a51-2f1d8e7c4b10","a":["192.168.1.10","10.0.0.5"],"p":8200,"n":"MyProject","t":"5f0c9e"}` encodes to `LC3-eyJ2IjozLCJpIjoiMGI2ZjJjN2UtNmYwZS00YzNhLTlhNTEtMmYxZDhlN2M0YjEwIiwiYSI6WyIxOTIuMTY4LjEuMTAiLCIxMC4wLjAuNSJdLCJwIjo4MjAwLCJuIjoiTXlQcm9qZWN0IiwidCI6IjVmMGM5ZSJ9`. Keys are written in the order above, but a decoder must not depend on key order.
 
-The Node hub prints one line `Mã mời: LC3-...` at start with every non-internal IPv4 address in `a`.
+`lanhub-cli` logs one line `Mã mời: LC3-...` per project at start, and the LAN Hub app shows the same code on the project's invite screen.
 
 ### 11.2 Versions 1 and 2 (`LC-`, legacy)
 
-`LC-` codes hold one address. `decodeInvite` in `lib/common.js` reads both: version 1 is the binary form (byte 1, four IPv4 bytes, big-endian port, token length, token bytes as hex, project as UTF-8) and version 2 is byte 2 followed by JSON `{h, p, n, t}`. The Node hub still prints one `Mã mời (<ip>): LC-...` line per address so 0.1.1 extensions can join. I1 removes both forms.
+`LC-` codes hold one address and come from hub 0.1, which speaks protocol 1 only. The extension does not decode them: a pasted `LC-` code gets the catalog message `invite.legacy` and changes nothing. With TLS off, lanhub still logs one `Mã mời (<ip>): LC-...` line per address and the app lists them for machines on extension 0.1.1, which then get the legacy message of section 14.1.
 
 ## 12. History
 
-Edit-run history (plan README section 5.6). These messages work only when `welcome.features` lists `history`. A hub that does not list it ignores them as unknown messages, and a client must not send them to such a hub. lanhub lists `history` from A5 for every project whose history store opened. It leaves it out, and logs one warning naming the folder, when the store cannot be opened (for example SQLite cannot use WAL on a network drive), and when history is turned off (`[project.history] enabled = false` or `--no-history`). The Node hub never lists it.
+Edit-run history (plan README section 5.6). These messages work only when `welcome.features` lists `history`. A hub that does not list it ignores them as unknown messages, and a client must not send them to such a hub. lanhub lists `history` for every project whose history store opened. It leaves it out, and logs one warning naming the folder, when the store cannot be opened (for example SQLite cannot use WAL on a network drive), and when history is turned off (`[project.history] enabled = false` or `--no-history`).
 
 | `t` | Direction | Purpose |
 |---|---|---|
@@ -345,7 +345,7 @@ Edit-run history (plan README section 5.6). These messages work only when `welco
 - A **deletion** is a run of its own by the member who deleted the file: `source` `delete`, `op_count` 1, `start_blob` and `end_blob` both the content the file had (so it can be restored), `chars_removed` its length for a text file.
 - A **blob file** gets one closed run for every `create` or `put` that stores it: `kind` `blob`, `source` `disk`, `op_count` 1, `start_blob` the bytes the file held before (`null` when it did not exist), `end_blob` the new bytes, character counts 0. Deleting a blob file records a deletion run with `kind` `blob`.
 - Text runs record the file's text at their start and end, encoded as UTF-8. The ops themselves are not stored.
-- lanhub keeps the index in `<history>/history.db` (SQLite, WAL) and contents in `<history>/blobs/<first 2 hex>/<sha256>.zst` (zstd), where `<history>` is `--history` or `<root>/.lan-collab/history`. Files the Node hub wrote in that folder (snapshots, `chat.jsonl`, `chat-media/`) stay as they are.
+- lanhub keeps the index in `<history>/history.db` (SQLite, WAL) and contents in `<history>/blobs/<first 2 hex>/<sha256>.zst` (zstd), where `<history>` is `--history` or `<root>/.lan-collab/history`. Files hub 0.1 wrote in that folder (snapshots, `chat.jsonl`, `chat-media/`) stay as they are.
 
 ### 12.2 Run record
 
@@ -414,7 +414,7 @@ lanhub prunes each project's history when the project starts, every hour, when `
 - **Undo a run** (B7) is a three-way merge like `git revert`: base is the run's `end_blob`, "theirs" its `start_blob`, "ours" the client's current text. The result is applied as a normal edit whose ops carry `src: "revert"` and `reverts: <run id>`, so it syncs to everyone and is recorded as a new `revert` run. History is never rewritten, so OT convergence is unaffected. A blob run is undone by a `put` of its `start_blob`.
 - **Restore a deleted file.** The deletion run's `end_blob` holds the deleted content; the client creates the file from it (`create`).
 
-## 13. lanhub-only transport features
+## 13. Transport features
 
 ### 13.1 TLS (A6)
 
@@ -505,58 +505,41 @@ Example:
 
 ## 14. Protocol 1 compatibility
 
-### 14.1 Node hub (until I1)
-
-The Node hub records the version per connection and answers a protocol 1 hello (section 3.2) exactly as hub 0.1.1 did, byte for byte, so installed 0.1.1 extensions keep working in a room shared with protocol 2 members:
-
-- Checks in the 0.1 order: proto, token, project, account. A refusal is `{"t":"error","message":<Vietnamese sentence>,"code":<"" or "account">}`, for example `{"t":"error","message":"Sai lanCollab.token.","code":""}`.
-- A successful probe gets `probe-ok`, the line `{"t":"probe-ok"}`; a refused probe gets the same `error` as a join.
-- `welcome` has exactly the 0.1 fields (no `proto`, `instanceId`, `hubName`, `hubVersion`), `features` is `["chat-image"]`, and `activity` holds 0.1 records.
-- Activity records are `{ts, who, color, text}` with the 0.1 sentence in `text` (the same sentences as section 15).
-- `pong` is `{"t":"pong"}`, without `ts`.
-- `chat_rejected` is `{reason}` with the 0.1 sentence.
-- Presence relayed to a protocol 1 member never has `rtt`, and a protocol 2 member's presence that changed only `rtt` is not relayed to it.
-
-### 14.2 lanhub
+### 14.1 Old client, LAN Hub
 
 lanhub accepts only protocol 2. A hello with `proto` 1 gets one exception to the no-display-text rule, because a 0.1 client reads only `message`:
 
 `{"t":"error","code":"protocol_version","data":{"hubMin":2,"hubMax":2},"message":"Phiên bản giao thức khác hub (máy: 1, hub: 2). Cập nhật extension LAN Collab lên 0.2."}`
 
-### 14.3 New client, old hub
+### 14.2 New client, old hub
 
-A protocol 2 client that reaches hub 0.1.1 gets that hub's 0.1 refusal (`message` set, `code` empty). A client shows `message` when it is present and renders from `code` otherwise.
+A protocol 2 client that reaches hub 0.1 gets that hub's 0.1 refusal (`message` set, `code` empty). A client shows `message` when it is present and renders from `code` otherwise.
 
 ## 15. Client rendering
 
-Display text lives on the client. Until B1 moves the strings to `extension/i18n/vi.json`, `renderHubMessage(code, data)` in `lib/client-core.js` is the one table, and it reproduces the 0.1.1 sentences so users see the same words. For errors `data` is the hub's `data` plus the client's own `project` and `proto`; for activity `data` is the record, and the extension shows `<who> <text>`.
+Display text lives on the client, in `extension/i18n/vi.json` (rules in `docs/copy-guide.md`). `lib/client-core.js` turns each error code and activity kind into a catalog entry. For errors the placeholders come from the hub's `data` plus the client's own `host`, `port`, `project` and `proto`; for activity they come from the record, and the extension shows `<who> <text>`.
 
-| Code or kind | Sentence |
+| Code or kind | Catalog entry |
 |---|---|
-| `protocol_version` | `Phiên bản giao thức khác hub (máy: <proto>, hub: <hubMax, or hubMin-hubMax>) — cập nhật extension.` |
-| `token_invalid` | `Sai lanCollab.token.` |
-| `project_unknown` | `Hub này phục vụ dự án "<p1>", "<p2>", máy đang mở "<project>".`, or `Hub này không phục vụ dự án "<project>".` when `projects` is empty |
-| `account_required` | `Hub chỉ cho các tài khoản trong danh sách vào. Đăng nhập GitHub hoặc Microsoft trong VS Code (biểu tượng tài khoản ở góc dưới bên trái), rồi chạy lệnh "LAN Collab: Dùng tài khoản VS Code".` |
-| `account_denied` | `Tài khoản <account> chưa được phép vào. Nhờ người quản lý hub thêm dòng "<entry>" vào <file, or danh sách tài khoản được phép của dự án>.` |
-| `tls_required` | `Hub yêu cầu kết nối mã hoá (TLS).` |
-| `image_invalid` | `Ảnh không hợp lệ hoặc lớn hơn <maxBytes in MB> MB.` |
-| `join` | `vào phòng (<addr>)` |
-| `leave` | `rời phòng` |
-| `edit` | `đang sửa <path>` |
-| `edit_disk` | `đang sửa <path> (AI/công cụ ngoài editor)` |
-| `create` | `tạo <path>` |
-| `delete` | `xoá <path>` |
-| `debug_start` | `bắt đầu debug <text>` |
-| `debug_stop` | `dừng debug` |
-| `status_set` | `đặt trạng thái: <text>` |
-| `status_clear` | `xoá trạng thái` |
-| anything else | the code itself |
+| `protocol_version` | `error.protocol_version.hub_newer` when the client's `proto` is below `hubMin`, else `error.protocol_version.hub_older` |
+| `token_invalid` | `error.token_invalid` |
+| `project_unknown` | `error.project_unknown.list` with the quoted `projects`, or `error.project_unknown` when `projects` is empty |
+| `account_required` | `error.account_required` |
+| `account_denied` | `error.account_denied` with `account` and `entry` |
+| `tls_required` | `error.tls_required` |
+| `image_invalid` | `error.image_invalid` with `maxBytes` in MB |
+| any other error code | `error.other` |
+| `join`, `leave`, `debug_stop`, `status_clear` | `activity.<kind>` |
+| `edit`, `edit_disk`, `create`, `delete` | `activity.<kind>` with `path` |
+| `debug_start` | `activity.debug_start` with `text` as the target |
+| `status_set` | `activity.status_set` with `text` |
+| any other kind | the kind itself |
 
-`lib/client-core.js` keeps the structured record and adds the sentence as `text` in `client.activity` and in its `activity` event. Its `fatal` event carries `(sentence, code)` with the protocol 2 code.
+`lib/client-core.js` keeps the structured record and adds the sentence as `text` in `client.activity` and in its `activity` event. Its `fatal` event carries `(sentence, code)` with the protocol 2 code, or the hub's `message` from hub 0.1 (section 14.2).
 
 ## 16. CLI contract for tests
 
-Not part of the wire protocol. Both hubs implement it so `test/conformance/` and `tools/loadgen.mjs` can drive either one through `LANHUB_CMD`.
+Not part of the wire protocol. `lanhub-cli` implements it so `test/conformance/` and `tools/loadgen.mjs` can drive it. They start `lanhub/target/release/lanhub-cli` (under `CARGO_TARGET_DIR` when set), and `LANHUB_CMD` points them at another build.
 
 | Flag | Meaning |
 |---|---|
@@ -564,22 +547,22 @@ Not part of the wire protocol. Both hubs implement it so `test/conformance/` and
 | `--port <n>` | TCP port, default 8200. `0` picks a free port. |
 | `--host <addr>` | TCP bind address, default `0.0.0.0`. |
 | `--project <name>` | Project name, default the folder's base name. |
-| `--token <secret>` | Project token. The Node hub also reads `LAN_COLLAB_TOKEN`. |
+| `--token <secret>` | Project token. Without it the hub reads `LAN_COLLAB_TOKEN`. |
 | `--allow-file <file>` | Account allow list (3.3). |
 | `--history <dir>` | History folder, default `<root>/.lan-collab/history`. |
-| `--no-history` | lanhub only: no edit-run history (`history` stays out of `features`). In `--config` mode it applies to every project. |
-| `--history-idle-ms <n>` | lanhub only, for tests: a run ends after `n` ms without an edit by its author instead of `idle_minutes`. In `--config` mode it applies to every project. |
+| `--no-history` | No edit-run history (`history` stays out of `features`). In `--config` mode it applies to every project. |
+| `--history-idle-ms <n>` | For tests: a run ends after `n` ms without an edit by its author instead of `idle_minutes`. In `--config` mode it applies to every project. |
 | `--exclude "a,b"` | Extra exclude patterns, comma-separated. |
 | `--name <name>` | Hub display name (`hubName`). |
 | `--log-format json` | With it, the hub prints `{"event":"listening","port":N}` as one stdout line once the TCP port and, when enabled, the discovery port are bound. Other stdout lines are human logs and never start with `{"event"`. |
 | `--stop-on-stdin-close` | When stdin closes, the hub writes every pending file and exits with code 0. On Windows a SIGINT sent from Node is a forced kill, so this is the graceful stop for tests. |
 | `--discovery-port <n>` | UDP discovery port, default 8201. |
 | `--no-discovery` | No UDP socket at all. `test/support/hub-process.js` passes it unless a test sets `discoveryPort`, so parallel test files never compete for UDP 8201. |
-| `--tls` | lanhub only (A6), single-project mode: TLS with the self-signed certificate of section 13.1, kept in `<root>/.lan-collab/`. The hub logs `TLS fingerprint SHA256 <hex>` before the listening line. `test/conformance/tls.test.js` and the `tls_required` case run only when `LANHUB_TLS=1`. |
-| `--tls-cert <file>`, `--tls-key <file>` | lanhub only (A6), single-project mode, always together: TLS with this PEM certificate chain and private key. |
-| `--diagnose` | lanhub only (A6): read-only self-check, one line per check (`ok`, `fail` or `skip`, the check name, details, and a fix hint on `fail`) for the config, the TCP port, the discovery port, the IPv4 interfaces, TLS, and on Windows the inbound firewall rules for both ports (`netsh advfirewall firewall show rule name=all dir=in verbose`, never changed). Takes `--config` or `--root` and the port, host, discovery and TLS flags. Exits 0 when no check fails, else 1. |
-| `--admin-token <secret>` | lanhub only (feature `admin`): turns the admin channel of section 13.3 on with this token (at least 16 characters), in either mode, over `[hub.admin]`. The environment variable `LANHUB_ADMIN_TOKEN` does the same without putting the token on the command line. From flags, admin sessions read and rotate but refuse edits. |
-| `--hash-admin-token <secret>` | lanhub only: prints the `token_sha256 = "…"` line for `[hub.admin]` and exits. |
-| `--config <file>` | lanhub only (feature `multi-project`), instead of `--root`: serve the projects of a `lanhub.toml` and apply the file again whenever it changes. `--port`, `--host`, `--name`, `--discovery-port` and `--no-discovery` override its `[hub]` values. A file that does not parse at start exits with code 1; later, it is logged and the running projects stay. |
+| `--tls` | Single-project mode: TLS with the self-signed certificate of section 13.1, kept in `<root>/.lan-collab/`. The hub logs `TLS fingerprint SHA256 <hex>` before the listening line. `test/conformance/tls.test.js` and the `tls_required` case run only when `LANHUB_TLS=1`. |
+| `--tls-cert <file>`, `--tls-key <file>` | Single-project mode, always together: TLS with this PEM certificate chain and private key. |
+| `--diagnose` | Read-only self-check, one line per check (`ok`, `fail` or `skip`, the check name, details, and a fix hint on `fail`) for the config, the TCP port, the discovery port, the IPv4 interfaces, TLS, and on Windows the inbound firewall rules for both ports (`netsh advfirewall firewall show rule name=all dir=in verbose`, never changed). Takes `--config` or `--root` and the port, host, discovery and TLS flags. Exits 0 when no check fails, else 1. |
+| `--admin-token <secret>` | Turns the admin channel of section 13.3 on with this token (at least 16 characters), in either mode, over `[hub.admin]`. The environment variable `LANHUB_ADMIN_TOKEN` does the same without putting the token on the command line. From flags, admin sessions read and rotate but refuse edits. |
+| `--hash-admin-token <secret>` | Prints the `token_sha256 = "…"` line for `[hub.admin]` and exits. |
+| `--config <file>` | Instead of `--root`: serve the projects of a `lanhub.toml` and apply the file again whenever it changes. `--port`, `--host`, `--name`, `--discovery-port` and `--no-discovery` override its `[hub]` values. A file that does not parse at start exits with code 1; later, it is logged and the running projects stay. |
 
 A flag given without a value (followed by another `--flag` or nothing) is `true`.
