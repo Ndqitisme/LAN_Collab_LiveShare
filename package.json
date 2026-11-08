@@ -44,7 +44,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node test/sync-plan.test.js && node test/revert.test.js && node test/history-client.test.js && node --test \"test/conformance/*.test.js\"",
+    "test": "node tools/check-strings.mjs && node test/i18n.test.js && node test/connection-machine.test.js && node test/diagnostics.test.js && node test/secrets.test.js && node test/report.test.js && node test/ot.test.js && node test/sync-plan.test.js && node test/revert.test.js && node test/history-client.test.js && node test/status-bar.test.js && node test/when-clauses.test.js && node --test \"test/conformance/*.test.js\"",
     "test:conformance": "node --test \"test/conformance/*.test.js\"",
     "pretest:vscode": "npm run build:webviews",
     "test:vscode": "node test/vscode/run.js",
@@ -198,6 +198,34 @@
     "menus": {
       "commandPalette": [
         {
+          "command": "lanCollab.connect",
+          "when": "lanCollab.state =~ /^(idle|stopped|needs_action)$/"
+        },
+        {
+          "command": "lanCollab.join",
+          "when": "lanCollab.state =~ /^(idle|stopped|needs_action)$/"
+        },
+        {
+          "command": "lanCollab.disconnect",
+          "when": "lanCollab.state =~ /^(resolving|connecting|handshaking|syncing|live|reconnecting|needs_action)$/"
+        },
+        {
+          "command": "lanCollab.follow",
+          "when": "lanCollab.state == live"
+        },
+        {
+          "command": "lanCollab.unfollow",
+          "when": "lanCollab.state == live && lanCollab.following"
+        },
+        {
+          "command": "lanCollab.setStatus",
+          "when": "lanCollab.state == live"
+        },
+        {
+          "command": "lanCollab.copyInvite",
+          "when": "lanCollab.state == live"
+        },
+        {
           "command": "lanCollab.history.openAfter",
           "when": "false"
         },
@@ -227,6 +255,23 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "lanCollab.openChat",
+        "key": "ctrl+alt+l c",
+        "mac": "cmd+alt+l c"
+      },
+      {
+        "command": "lanCollab.follow",
+        "key": "ctrl+alt+l f",
+        "mac": "cmd+alt+l f"
+      },
+      {
+        "command": "lanCollab.showHistory",
+        "key": "ctrl+alt+l h",
+        "mac": "cmd+alt+l h"
+      }
+    ],
     "viewsWelcome": [
       {
         "view": "lanCollab.start",
@@ -237,7 +282,7 @@
       {
         "id": "lanCollab.start",
         "title": "Bắt đầu với LAN Collab",
-        "description": "Tham gia dự án trên LAN Hub, kiểm tra kết nối và nhắn cho các thành viên.",
+        "description": "Tham gia dự án trên LAN Hub, kiểm tra kết nối, nhắn cho các thành viên và xem lịch sử chỉnh sửa.",
         "steps": [
           {
             "id": "invite",
@@ -279,13 +324,25 @@
           {
             "id": "chat",
             "title": "Nhắn cho dự án",
-            "description": "Chat gửi tin nhắn, ảnh và vị trí trong file tới các thành viên đang trực tuyến.\n[Mở chat](command:lanCollab.openChat)",
+            "description": "Chat gửi tin nhắn, ảnh và vị trí trong file tới các thành viên đang trực tuyến. Phím tắt Ctrl+Alt+L rồi C mở chat, Ctrl+Alt+L rồi F đi theo một thành viên.\n[Mở chat](command:lanCollab.openChat)",
             "media": {
               "svg": "extension/media/walkthrough/chat.svg",
               "altText": "Hai tin nhắn chat giữa các thành viên"
             },
             "completionEvents": [
               "onCommand:lanCollab.openChat"
+            ]
+          },
+          {
+            "id": "history",
+            "title": "Xem lịch sử chỉnh sửa",
+            "description": "Lịch sử chỉnh sửa liệt kê từng lượt chỉnh sửa của các thành viên trên file đang mở. Mỗi lượt chỉnh sửa mở, so sánh, sao chép hoặc hoàn tác được. Phím tắt Ctrl+Alt+L rồi H.\n[Xem lịch sử chỉnh sửa](command:lanCollab.showHistory)",
+            "media": {
+              "svg": "extension/media/walkthrough/history.svg",
+              "altText": "Danh sách lượt chỉnh sửa của hai thành viên trên một file"
+            },
+            "completionEvents": [
+              "onCommand:lanCollab.showHistory"
             ]
           }
         ]
@@ -297,33 +354,39 @@
         "lanCollab.server": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Địa chỉ LAN Hub dạng `IP:cổng`, ví dụ `192.168.1.10:8200`. Không cần đặt khi thư mục đã tham gia bằng mã mời."
+          "markdownDescription": "Địa chỉ LAN Hub dạng `IP:cổng`, ví dụ `192.168.1.10:8200`. Không cần đặt khi thư mục đã tham gia bằng mã mời.",
+          "order": 1
         },
         "lanCollab.project": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Tên dự án trên LAN Hub. Nên đặt trong `.vscode/settings.json` của dự án."
+          "markdownDescription": "Tên dự án trên LAN Hub. Nên đặt trong `.vscode/settings.json` của dự án.",
+          "order": 2
         },
         "lanCollab.token": {
           "type": "string",
           "default": "",
-          "description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành và bị xoá khỏi cài đặt."
+          "description": "Token của LAN Hub. Khi LAN Collab khởi động, token đặt ở đây được chuyển vào kho bí mật của hệ điều hành và bị xoá khỏi cài đặt.",
+          "order": 3
+        },
+        "lanCollab.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Tự động kết nối khi mở thư mục đã gắn với LAN Hub qua mã mời, hoặc qua `#lanCollab.server#` và `#lanCollab.project#`.",
+          "order": 4
         },
         "lanCollab.name": {
           "type": "string",
           "default": "",
           "description": "Tên hiển thị với thành viên khác. Để trống thì dùng tên tài khoản VS Code, hoặc tài-khoản-Windows@tên-máy khi chưa đăng nhập.",
-          "scope": "application"
-        },
-        "lanCollab.autoConnect": {
-          "type": "boolean",
-          "default": true,
-          "description": "Tự động kết nối khi mở thư mục đã gắn với LAN Hub qua mã mời, hoặc qua lanCollab.server và lanCollab.project."
+          "scope": "application",
+          "order": 5
         },
         "lanCollab.autoSave": {
           "type": "boolean",
           "default": true,
-          "description": "Tự động lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên ổ đĩa của mọi máy luôn cập nhật. Trình chạy, debugger và công cụ AI đều đọc từ ổ đĩa."
+          "description": "Tự động lưu file đang mở khoảng 0,4 giây sau mỗi thay đổi, để bản trên ổ đĩa của mọi máy luôn cập nhật. Trình chạy, debugger và công cụ AI đều đọc từ ổ đĩa.",
+          "order": 6
         },
         "lanCollab.exclude": {
           "type": "array",
@@ -331,7 +394,8 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Mẫu glob không đồng bộ, bổ sung vào danh sách mặc định gồm `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `.lan-collab`, `~$*`, `.DS_Store`, `Thumbs.db`. Ví dụ: `[\"output.csv\", \"build/**\"]`."
+          "markdownDescription": "Mẫu glob không đồng bộ, bổ sung vào danh sách mặc định gồm `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `*.pyc`, `.lan-collab`, `~$*`, `.DS_Store`, `Thumbs.db`. Ví dụ: `[\"output.csv\", \"build/**\"]`.",
+          "order": 7
         }
       }
     },

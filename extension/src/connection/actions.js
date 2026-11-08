@@ -10,6 +10,23 @@ const { signIn } = require('./account');
 
 const EXTENSION_ID = 'ndqitisme.lan-collab';
 
+// The codicon each action carries in the status bar menu.
+const ACTION_ICONS = {
+  join: '$(key)',
+  open_settings: '$(settings-gear)',
+  paste_invite: '$(key)',
+  enter_token: '$(lock)',
+  choose_project: '$(folder)',
+  sign_in: '$(sign-in)',
+  switch_account: '$(account)',
+  copy_entry: '$(copy)',
+  update_extension: '$(cloud-download)',
+  reconnect: '$(refresh)',
+  diagnose: '$(pulse)',
+};
+
+const actionIcon = (id) => ACTION_ICONS[id] || ACTION_ICONS.diagnose;
+
 function actionLabel(id) {
   switch (id) {
     case 'join': return t('action.join');
@@ -72,6 +89,14 @@ function runAction(app, id, s) {
   }
 }
 
+// For a command that needs a live connection, run while there is none.
+async function showNotConnected(app) {
+  const connect = t('menu.connect');
+  const pick = await vscode.window.showWarningMessage(t('connect.notConnected'), connect, t('action.diagnose'));
+  if (pick === connect) vscode.commands.executeCommand('lanCollab.connect');
+  else if (pick) vscode.commands.executeCommand('lanCollab.diagnose');
+}
+
 // The toast shown once when the connection lands in needs_action. The status bar menu offers the same actions.
 async function showNeedsAction(app, s) {
   const labels = s.actions.map(actionLabel);
@@ -80,4 +105,4 @@ async function showNeedsAction(app, s) {
   if (pick) runAction(app, s.actions[labels.indexOf(pick)], s);
 }
 
-module.exports = { actionLabel, reasonText, runAction, showNeedsAction };
+module.exports = { actionLabel, actionIcon, reasonText, runAction, showNeedsAction, showNotConnected };

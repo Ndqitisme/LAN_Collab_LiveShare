@@ -13,7 +13,7 @@ function showDownloadProgress(controller) {
     skipped += 1;
   };
   c.on('ignored', onIgnored);
-  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('sync.progress.title', { project: c.project }), cancellable: true }, (progress, cancel) => new Promise((resolve) => {
+  vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('sync.progress.title', { project: c.project }) }, (progress) => new Promise((resolve) => {
     let shown = 0;
     let timer = null;
     const finish = (message) => {
@@ -22,8 +22,6 @@ function showDownloadProgress(controller) {
       if (message) vscode.window.showInformationMessage(message);
       resolve();
     };
-    // Closing the notification only hides it; synchronization continues in the background.
-    cancel.onCancellationRequested(() => finish(null));
     timer = setInterval(() => {
       const done = total - c.loading.size;
       progress.report({ message: t('sync.progress.count', { done, total }), increment: ((done - shown) / total) * 100 });

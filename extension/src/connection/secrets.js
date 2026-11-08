@@ -37,7 +37,7 @@ async function migrateTokens({ globalState, secrets, settingsFolderKey, setting,
   let moved = 0;
   const move = async (key, token, clear, what) => {
     if (!(await storeVerified(secrets, key, token))) {
-      log(`Không chuyển được ${what} vào kho bí mật: đọc lại không khớp. Giữ bản cũ.`);
+      log(`Không chuyển được ${what} vào kho bí mật: đọc lại không khớp. Giữ bản cũ.`, 'warn');
       return;
     }
     await clear();

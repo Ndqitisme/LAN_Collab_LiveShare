@@ -53,7 +53,10 @@ function compareWithCurrent(src, abs) {
 async function restoreBackup(app) {
   const folder = config.workspaceFolder();
   if (!folder || folder.uri.scheme !== 'file') {
-    vscode.window.showWarningMessage(t('connect.noFolder'));
+    const open = t('action.open_folder');
+    vscode.window.showWarningMessage(t('backup.noFolder'), open).then((pick) => {
+      if (pick) vscode.commands.executeCommand('workbench.action.files.openFolder');
+    });
     return;
   }
   const root = folder.uri.fsPath;
@@ -63,7 +66,7 @@ async function restoreBackup(app) {
     return;
   }
   const pickedStamp = await vscode.window.showQuickPick(
-    stamps.map((s) => ({ label: `$(history) ${timeLabel(s.time)}`, description: t('backup.stamp.description', { count: s.files.size }), stamp: s })),
+    stamps.map((s) => ({ label: `$(archive) ${timeLabel(s.time)}`, description: t('backup.stamp.description', { count: s.files.size }), stamp: s })),
     { placeHolder: t('backup.stamp.placeholder') },
   );
   if (!pickedStamp) return;
@@ -71,7 +74,7 @@ async function restoreBackup(app) {
   const time = timeLabel(stamp.time);
   const rels = [...stamp.files.keys()].sort();
   const pick = await vscode.window.showQuickPick([
-    { label: `$(history) ${t('backup.file.all', { count: rels.length })}`, all: true },
+    { label: `$(discard) ${t('backup.file.all', { count: rels.length })}`, all: true },
     { label: '', kind: vscode.QuickPickItemKind.Separator },
     ...rels.map((rel) => ({ label: `$(file) ${rel}`, description: compareWithCurrent(stamp.files.get(rel), path.join(root, rel)), rel })),
   ], { placeHolder: t('backup.file.placeholder', { time }), matchOnDescription: true });
@@ -94,7 +97,7 @@ function fileActions(restorer, rel, src, time) {
   qp.title = t('backup.action.placeholder', { path: rel, time });
   qp.ignoreFocusOut = true;
   const compare = { label: `$(diff) ${t('backup.action.compare')}` };
-  const restore = { label: `$(history) ${t('backup.action.restore')}` };
+  const restore = { label: `$(discard) ${t('backup.action.restore')}` };
   qp.items = [compare, restore];
   qp.onDidAccept(async () => {
     const [item] = qp.selectedItems;
@@ -146,8 +149,11 @@ class Restorer {
       this.app.log(`Đã khôi phục ${rel} từ ${src}`);
       return true;
     } catch (err) {
-      this.app.log(`[LỖI] không khôi phục được ${rel}: ${err.message}`);
-      vscode.window.showErrorMessage(t('backup.failed', { path: rel }));
+      this.app.log(`Không khôi phục được ${rel}: ${err.message}`, 'error');
+      const retry = t('action.retry');
+      vscode.window.showErrorMessage(t('backup.failed', { path: rel }), retry).then((pick) => {
+        if (pick) this.restore(rel, src);
+      });
       return false;
     }
   }

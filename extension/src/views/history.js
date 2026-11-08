@@ -92,7 +92,7 @@ class HistoryView {
       const page = await history.list(rel, before, PAGE_SIZE);
       this._post({ type: 'page', gen, before, runs: page.runs, more: page.more });
     } catch (err) {
-      this.app.log(`[LỖI] lịch sử chỉnh sửa ${rel || '(dự án)'}: ${err.message}`);
+      this.app.log(`Lịch sử chỉnh sửa ${rel || '(dự án)'}: ${err.message}`, 'error');
       this._post({ type: 'page', gen, before, error: true });
     }
   }
@@ -105,7 +105,7 @@ class HistoryView {
       const content = run && run.end_blob ? await history.blob(run.end_blob) : null;
       if (content) bytes = content.kind === 'text' ? Buffer.byteLength(content.text, 'utf8') : Buffer.from(content.b64, 'base64').length;
     } catch (err) {
-      this.app.log(`[LỖI] lịch sử chỉnh sửa: không đọc được nội dung lượt ${id}: ${err.message}`);
+      this.app.log(`Lịch sử chỉnh sửa: không đọc được nội dung lượt ${id}: ${err.message}`, 'error');
     }
     this._post({ type: 'size', id, bytes });
   }

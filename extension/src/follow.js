@@ -3,6 +3,8 @@
 const vscode = require('vscode');
 const path = require('path');
 const { t } = require('../../lib/i18n');
+const { showNotConnected } = require('./connection/actions');
+const { copyInvite } = require('./connection/invite');
 
 // A member's place for the quick pick: file and line, debug target, status text.
 function describe(p, status) {
@@ -22,6 +24,7 @@ class Follow {
 
   set(id) {
     this.following = id;
+    vscode.commands.executeCommand('setContext', 'lanCollab.following', Boolean(id));
     this.app.statusBar.render();
     this.app.session.update();
     if (id) this.followNow();
@@ -68,12 +71,15 @@ class Follow {
   async pick() {
     const { state, core } = this.app.controller;
     if (state.name !== 'live') {
-      vscode.window.showWarningMessage(t('connect.notConnected'));
+      showNotConnected(this.app);
       return;
     }
     const items = [...core.users.values()].map((u) => ({ label: u.name, description: describe(u.presence, u.status), id: u.id }));
     if (!items.length) {
-      vscode.window.showInformationMessage(t('follow.nobody'));
+      const invite = t('menu.copyInvite');
+      vscode.window.showInformationMessage(t('follow.nobody'), invite).then((pick) => {
+        if (pick) copyInvite(this.app);
+      });
       return;
     }
     const pick = await vscode.window.showQuickPick(items, { placeHolder: t('follow.placeholder') });
@@ -93,7 +99,7 @@ class Follow {
     const folder = this.app.controller.folder;
     const rel = core && core.relOf(path.join(folder.uri.fsPath, ref.replace(/\\/g, '/')));
     if (!rel || !core.entries.has(rel)) {
-      vscode.window.showWarningMessage(t('ref.missing', { path: ref }));
+      vscode.window.showInformationMessage(t('ref.missing', { path: ref }));
       return;
     }
     const ed = await vscode.window.showTextDocument(vscode.Uri.file(path.join(folder.uri.fsPath, rel)), { preview: true });

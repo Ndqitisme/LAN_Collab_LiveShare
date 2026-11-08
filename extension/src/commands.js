@@ -5,14 +5,17 @@ const { t } = require('../../lib/i18n');
 const { ACTIVE } = require('../../lib/connection-machine');
 const { join, copyInvite } = require('./connection/invite');
 const { signIn } = require('./connection/account');
-const { actionLabel, runAction } = require('./connection/actions');
+const { actionLabel, actionIcon, runAction, showNotConnected } = require('./connection/actions');
 const { registerDiagnose } = require('./connection/diagnose');
 const { restoreBackup } = require('./backup');
 
 function connect(app) {
   const s = app.controller.state;
   if (s.name === 'live') {
-    vscode.window.showInformationMessage(t('connect.already', { project: s.target.project }));
+    const disconnect = t('menu.disconnect');
+    vscode.window.showInformationMessage(t('connect.already', { project: s.target.project }), disconnect).then((pick) => {
+      if (pick) app.controller.disconnect();
+    });
     return;
   }
   // Repeated clicks while a connection is under way only point at the status bar, which already shows it.
@@ -26,40 +29,65 @@ function connect(app) {
 async function setStatus(app) {
   const core = app.controller.core;
   if (!core) {
-    vscode.window.showWarningMessage(t('connect.notConnected'));
+    showNotConnected(app);
     return;
   }
   const text = await vscode.window.showInputBox({ prompt: t('status.input.prompt'), value: core.status });
   if (text !== undefined) core.setStatus(text.trim());
 }
 
-async function menu(app) {
-  const { state, core } = app.controller;
+const WALKTHROUGH = 'ndqitisme.lan-collab#lanCollab.start';
+
+// The status bar menu: connection, team, history and help groups, each holding only what the current state can run.
+// package.json hides the same commands from the command palette with `when` clauses on lanCollab.state.
+function menuItems(app) {
+  const { state } = app.controller;
   const follow = app.follow;
-  const disconnect = { label: `$(debug-disconnect) ${t('menu.disconnect')}`, run: () => app.controller.disconnect() };
-  const items = [];
+  const item = (icon, label, run) => ({ label: `${icon} ${label}`, run });
+  const command = (id) => () => vscode.commands.executeCommand(id);
+  const disconnect = item('$(debug-disconnect)', t('menu.disconnect'), () => app.controller.disconnect());
+
+  // A needs_action state lists its own actions first. The generic item for the same command then stays out.
+  const offered = new Set(state.name === 'needs_action' ? state.actions : []);
+  const connection = [];
   if (state.name === 'needs_action') {
-    for (const id of state.actions) items.push({ label: `$(tools) ${actionLabel(id)}`, run: () => runAction(app, id, state) });
-    items.push(disconnect);
-  } else if (core) {
-    items.push({ label: `$(link) ${t('menu.copyInvite')}`, run: () => copyInvite(app) });
-    const unread = app.statusBar.unread;
-    items.push({ label: `$(comment-discussion) ${unread ? t('menu.openChatUnread', { count: unread }) : t('menu.openChat')}`, run: () => vscode.commands.executeCommand('lanCollab.openChat') });
-    items.push({ label: `$(eye) ${t('menu.follow')}`, run: () => follow.pick() });
-    if (follow.following) items.push({ label: `$(eye-closed) ${t('menu.unfollow')}`, run: () => follow.set(null) });
-    items.push({ label: `$(comment) ${t('menu.setStatus')}`, run: () => setStatus(app) });
-    items.push(disconnect);
-  } else if (state.name === 'resolving') {
-    items.push(disconnect);
+    for (const id of state.actions) connection.push(item(actionIcon(id), actionLabel(id), () => runAction(app, id, state)));
+    connection.push(disconnect);
+  } else if (state.name === 'reconnecting') {
+    connection.push(item(actionIcon('reconnect'), t('action.reconnect'), () => app.controller.reconnect()), disconnect);
+  } else if (ACTIVE.has(state.name)) {
+    connection.push(disconnect);
   } else {
-    items.push({ label: `$(plug) ${t('menu.connect')}`, run: () => connect(app) });
-    items.push({ label: `$(key) ${t('menu.join')}`, run: () => join(app) });
+    connection.push(item('$(plug)', t('menu.connect'), () => connect(app)), item('$(key)', t('menu.join'), () => join(app)));
   }
-  items.push({ label: `$(settings-gear) ${t('menu.openConnection')}`, run: () => vscode.commands.executeCommand('lanCollab.openConnection') });
-  items.push({ label: `$(pulse) ${t('menu.diagnose')}`, run: () => vscode.commands.executeCommand('lanCollab.diagnose') });
-  items.push({ label: `$(account) ${t('menu.signIn')}`, run: () => signIn(app) });
-  items.push({ label: `$(output) ${t('menu.showLog')}`, run: () => app.out.show() });
-  const pick = await vscode.window.showQuickPick(items, { placeHolder: t('menu.placeholder') });
+  if (!offered.has('open_settings')) connection.push(item('$(settings-gear)', t('menu.openConnection'), command('lanCollab.openConnection')));
+  if (!offered.has('sign_in') && !offered.has('switch_account')) connection.push(item('$(account)', t('menu.signIn'), () => signIn(app)));
+
+  const team = [];
+  const history = [];
+  if (state.name === 'live') {
+    const unread = app.statusBar.unread;
+    team.push(item('$(comment-discussion)', unread ? t('menu.openChatUnread', { count: unread }) : t('menu.openChat'), command('lanCollab.openChat')));
+    team.push(item('$(eye)', t('menu.follow'), () => follow.pick()));
+    if (follow.following) team.push(item('$(eye-closed)', t('menu.unfollow'), () => follow.set(null)));
+    team.push(item('$(edit)', t('menu.setStatus'), () => setStatus(app)));
+    team.push(item('$(link)', t('menu.copyInvite'), () => copyInvite(app)));
+    history.push(item('$(history)', t('command.lanCollab.showHistory.title'), command('lanCollab.showHistory')));
+  }
+
+  const help = [
+    ...(offered.has('diagnose') ? [] : [item('$(pulse)', t('menu.diagnose'), command('lanCollab.diagnose'))]),
+    item('$(output)', t('menu.showLog'), () => app.out.show()),
+    item('$(book)', t('menu.walkthrough'), () => vscode.commands.executeCommand('workbench.action.openWalkthrough', WALKTHROUGH, false)),
+  ];
+
+  const groups = [[t('menu.group.connection'), connection], [t('menu.group.team'), team], [t('menu.group.history'), history], [t('menu.group.help'), help]];
+  return groups.filter(([, items]) => items.length)
+    .flatMap(([label, items]) => [{ label, kind: vscode.QuickPickItemKind.Separator }, ...items]);
+}
+
+async function menu(app) {
+  const pick = await vscode.window.showQuickPick(menuItems(app), { title: 'LAN Collab', placeHolder: t('menu.placeholder') });
   if (pick) pick.run();
 }
 

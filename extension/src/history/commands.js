@@ -11,6 +11,7 @@ const C = require('../../../lib/common');
 const { diff } = require('../../../lib/ot');
 const { revertRun, bufferOf } = require('../../../lib/history-client');
 const { SCHEME, HistoryDocuments, runUri } = require('./provider');
+const { showNotConnected } = require('../connection/actions');
 
 // An op of this file still waiting for its ack holds the revert back; on a LAN that lasts milliseconds.
 const REVERT_WAIT_MS = 5000;
@@ -22,13 +23,17 @@ function registerHistory(app) {
   const cmd = (id, fn) => vscode.commands.registerCommand(id, async (arg) => {
     const history = app.history;
     if (!history || !history.available()) {
-      vscode.window.showWarningMessage(app.controller.core ? t('history.unavailable') : t('connect.notConnected'));
+      if (app.controller.core) vscode.window.showInformationMessage(t('history.unavailable'));
+      else showNotConnected(app);
       return;
     }
     const runId = arg && typeof arg === 'object' ? arg.id : arg;
     const listed = typeof runId === 'string' ? history.run(runId) : null;
     if (!listed || !C.safeRel(listed.path)) {
-      vscode.window.showWarningMessage(t('history.runGone'));
+      const reopen = t('command.lanCollab.showHistory.title');
+      vscode.window.showWarningMessage(t('history.runGone'), reopen).then((pick) => {
+        if (pick) vscode.commands.executeCommand('lanCollab.showHistory');
+      });
       return;
     }
     let run = listed;
@@ -42,11 +47,14 @@ function registerHistory(app) {
       await fn(app, docs, run);
     } catch (err) {
       if (err instanceof Refusal) {
-        vscode.window.showWarningMessage(err.message);
+        vscode.window.showInformationMessage(err.message);
         return;
       }
-      app.log(`[LỖI] ${id} ${run.path} lượt ${run.id}: ${err.stack || err}`);
-      vscode.window.showErrorMessage(t('history.loadFailed'));
+      app.log(`${id} ${run.path} lượt ${run.id}: ${err.stack || err}`, 'error');
+      const retry = t('action.retry');
+      vscode.window.showErrorMessage(t('history.loadFailed'), retry).then((pick) => {
+        if (pick) vscode.commands.executeCommand(id, arg);
+      });
     }
   });
   app.context.subscriptions.push(
@@ -149,7 +157,12 @@ async function revert(app, docs, run) {
   app.log(`Hoàn tác lượt ${run.id} của ${run.author_name} trong ${run.path}: ${status}`);
   if (status === 'applied') vscode.window.showInformationMessage(t('history.revert.done', { author: run.author_name, file: run.path }));
   else if (status === 'noop') vscode.window.showInformationMessage(t('history.revert.nothing'));
-  else vscode.window.showErrorMessage(t('history.revert.failed', { file: run.path }));
+  else {
+    const retry = t('action.retry');
+    vscode.window.showErrorMessage(t('history.revert.failed', { file: run.path }), retry).then((pick) => {
+      if (pick) vscode.commands.executeCommand('lanCollab.history.revert', run.id);
+    });
+  }
 }
 
 async function closeDiffs(...uris) {

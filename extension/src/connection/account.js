@@ -47,8 +47,9 @@ async function getAccount(app, interactive) {
       const s = await vscode.authentication.getSession(pick.provider.id, pick.provider.scopes, { createIfNone: true, clearSessionPreference: true });
       account = { provider: pick.provider.id, label: s.account.label };
     } catch (e) {
-      app.log(`Đăng nhập ${pick.provider.id} lỗi: ${e.message}`);
-      vscode.window.showErrorMessage(t('account.signInFailed', { provider: providerName(pick.provider.id) }));
+      app.log(`Đăng nhập ${pick.provider.id} lỗi: ${e.message}`, 'error');
+      const retry = t('action.retry');
+      if ((await vscode.window.showErrorMessage(t('account.signInFailed', { provider: providerName(pick.provider.id) }), retry)) === retry) return getAccount(app, true);
       return null;
     }
   }

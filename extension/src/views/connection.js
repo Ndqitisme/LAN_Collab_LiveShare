@@ -72,7 +72,7 @@ class ConnectionPanel {
     });
     panel.iconPath = vscode.Uri.joinPath(extensionUri, 'media', 'icon.svg');
     panel.webview.html = webviewHtml(panel.webview, extensionUri, 'connection', { bodyClass: 'lc-editor' });
-    panel.webview.onDidReceiveMessage((m) => this._onMessage(m).catch((err) => this.app.log(`[LỖI] màn hình kết nối: ${err.stack || err}`)));
+    panel.webview.onDidReceiveMessage((m) => this._onMessage(m).catch((err) => this.app.log(`Màn hình kết nối: ${err.stack || err}`, 'error')));
     panel.onDidChangeViewState(() => this._syncRttTimer());
     panel.onDidDispose(() => {
       this.panel = null;
@@ -204,7 +204,7 @@ class ConnectionPanel {
       if (!list.includes(hub)) list.push(hub);
       this._post({ type: 'hubs', hubs: { searching: true, list } });
     });
-    if (error) this.app.log(`Tìm LAN Hub trong mạng LAN: ${error}`);
+    if (error) this.app.log(`Tìm LAN Hub trong mạng LAN: ${error}`, 'warn');
     this.hubs = { searching: false, list };
     this._post({ type: 'hubs', hubs: this.hubs });
   }
@@ -227,7 +227,7 @@ class ConnectionPanel {
       this.diag = { running: false, results, at: this.diag.at };
       return results;
     } catch (err) {
-      this.app.log(`[LỖI] chẩn đoán kết nối: ${err.stack || err}`);
+      this.app.log(`Chẩn đoán kết nối: ${err.stack || err}`, 'error');
       this.diag = { ...this.diag, running: false };
       return this.diag.results;
     } finally {

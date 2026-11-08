@@ -93,7 +93,7 @@ class ConnectionController {
     if (!current()) return;
     const writeError = diagnostics.checkWritable(folder.uri.fsPath, diagnostics.defaultEnv());
     if (writeError) {
-      this.app.log(`Không ghi được vào ${folder.uri.fsPath}: ${writeError}`);
+      this.app.log(`Không ghi được vào ${folder.uri.fsPath}: ${writeError}`, 'warn');
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: 'folder_readonly', data: { path: folder.uri.fsPath } });
       return;
     }
@@ -103,7 +103,7 @@ class ConnectionController {
       won = await this._openSocket();
     } catch (err) {
       if (!current()) return;
-      this.app.log(`Không kết nối được LAN Hub: ${err.message}`);
+      this.app.log(`Không kết nối được LAN Hub: ${err.message}`, 'warn');
       this.dispatch({ type: 'RESOLVE_FAILED', session, code: err.code || 'failed', data: err.data || {} });
       return;
     }
@@ -181,7 +181,7 @@ class ConnectionController {
     this.core = core;
     this.folder = folder;
     core.on('connection', (e) => {
-      if (e.type === 'WELCOME') this._rememberHub(core, e.instanceId).catch((err) => this.app.log(`Không lưu được LAN Hub của thư mục: ${err.message}`));
+      if (e.type === 'WELCOME') this._rememberHub(core, e.instanceId).catch((err) => this.app.log(`Không lưu được LAN Hub của thư mục: ${err.message}`, 'error'));
       this.dispatch({ ...e, session });
     });
 
@@ -218,7 +218,7 @@ class ConnectionController {
     if (RESTART_KEYS.some((k) => e.affectsConfiguration(k, uri))) {
       // The settings editor writes while the member types: wait for the value to settle.
       clearTimeout(this.restartTimer);
-      this.restartTimer = setTimeout(() => this._restartIfChanged().catch((err) => this.app.log(`[LỖI] áp cấu hình kết nối: ${err.stack || err}`)), 1000);
+      this.restartTimer = setTimeout(() => this._restartIfChanged().catch((err) => this.app.log(`Không áp được cấu hình kết nối: ${err.stack || err}`, 'error')), 1000);
     }
   }
 

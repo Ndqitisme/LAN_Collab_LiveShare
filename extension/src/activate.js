@@ -8,6 +8,7 @@ const { ConnectionController } = require('./connection/controller');
 const { showNeedsAction } = require('./connection/actions');
 const { showDownloadProgress } = require('./connection/sync-ui');
 const { registerCommands } = require('./commands');
+const { createLog } = require('./log');
 const { StatusBar } = require('./status-bar');
 const { SessionView } = require('./views/session');
 const { ConnectionPanel } = require('./views/connection');
@@ -23,11 +24,9 @@ const { HistoryClient } = require('../../lib/history-client');
 let app = null;
 
 function activate(context) {
+  const activatedAt = performance.now();
   const out = vscode.window.createOutputChannel('LAN Collab');
-  const log = (line) => {
-    out.appendLine(`[${new Date().toLocaleTimeString('vi-VN')}] ${line}`);
-    if (process.env.LAN_COLLAB_DEBUG) console.log(`[lan-collab] ${line}`);
-  };
+  const log = createLog(out);
   app = { context, out, log, lastEditor: null };
   app.controller = new ConnectionController(app);
   app.sync = new SyncPanel(app);
@@ -54,13 +53,16 @@ function activate(context) {
   context.subscriptions.push(
     out,
     app.sync,
-    statusBar.item,
+    statusBar,
     vscode.window.registerWebviewViewProvider('lanCollab.session', session, { webviewOptions: { retainContextWhenHidden: true } }),
     session,
     vscode.window.registerWebviewViewProvider('lanCollab.chat', chatView, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.window.registerWebviewViewProvider('lanCollab.history', historyView, { webviewOptions: { retainContextWhenHidden: true } }),
     controller.onDidChange(({ prev, state }) => {
+      const changedAt = performance.now();
+      if (state.name !== prev.name) vscode.commands.executeCommand('setContext', 'lanCollab.state', state.name);
       statusBar.render();
+      if (state.name !== prev.name) log(`Thanh trạng thái: ${state.name} sau ${(performance.now() - changedAt).toFixed(1)} ms`, 'debug');
       session.refresh();
       historyView.update();
       // The open connection panel already shows the reason and its actions.
@@ -87,9 +89,11 @@ function activate(context) {
     vscode.debug.onDidChangeActiveDebugSession(() => presence.schedule()),
   );
 
+  vscode.commands.executeCommand('setContext', 'lanCollab.state', controller.state.name);
   statusBar.render();
+  log(`Đã kích hoạt LAN Collab sau ${(performance.now() - activatedAt).toFixed(1)} ms`, 'debug');
   // Tokens move to SecretStorage before the first connection reads one.
-  config.migrateTokens(context, log).catch((err) => log(`[LỖI] chuyển token vào kho bí mật: ${err.stack || err}`)).then(() => {
+  config.migrateTokens(context, log).catch((err) => log(`Không chuyển được token vào kho bí mật: ${err.stack || err}`, 'error')).then(() => {
     const first = config.workspaceFolder();
     if (vscode.workspace.getConfiguration('lanCollab').get('autoConnect') && first && config.connectionFor(context, first)) controller.connect();
   });
@@ -130,7 +134,11 @@ function wireCore(core) {
     session.onActivity(a);
   });
   core.on('backup', (dir) => {
-    vscode.window.showWarningMessage(t('sync.backup', { dir }));
+    log(`Đã sao lưu bản trên máy này vào ${dir}`);
+    const open = t('sync.backup.open');
+    vscode.window.showWarningMessage(t('sync.backup'), open).then((pick) => {
+      if (pick) vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
+    });
   });
 }
 
@@ -140,7 +148,7 @@ function coreGone() {
   app.historyView.update();
   app.editors.disposeAll();
   app.decorations.disposeAll();
-  app.follow.following = null;
+  app.follow.set(null);
   app.session.refresh();
   app.chatView.refresh();
 }

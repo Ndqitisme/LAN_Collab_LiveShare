@@ -31,11 +31,12 @@ async function diagnosisTarget(app) {
 }
 
 // Resolves {target, results}; onStep sees each result as it arrives. A hub found at a new address by rediscovery
-// is stored, as the connection path would.
-async function runDiagnosis(app, onStep = () => {}) {
+// is stored, as the connection path would. A cancelled token stops before the next step.
+async function runDiagnosis(app, onStep = () => {}, token = null) {
   const target = await diagnosisTarget(app);
   const results = [];
   for await (const r of runChecks(target)) {
+    if (token && token.isCancellationRequested) break;
     results.push(r);
     if (r.status === 'fixed' && target.source === 'join') await joins.update(app.context.globalState, target.key, { lastGood: r.data.host, port: r.data.port });
     onStep(r);
@@ -65,10 +66,19 @@ async function copyReport(text) {
 }
 
 async function diagnose(app) {
-  const { target, results } = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('diag.progress') }, (progress) => runDiagnosis(app, (r) => {
-    const n = STEPS.indexOf(r.step) + 1;
-    if (n < STEPS.length) progress.report({ message: t('diag.progress.step', { n: n + 1, total: STEPS.length, title: stepTitle(STEPS[n]) }) });
-  }));
+  const cancelled = Symbol('cancelled');
+  const run = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t('diag.progress'), cancellable: true }, (progress, token) => Promise.race([
+    runDiagnosis(app, (r) => {
+      const n = STEPS.indexOf(r.step) + 1;
+      if (n < STEPS.length) progress.report({ message: t('diag.progress.step', { n: n + 1, total: STEPS.length, title: stepTitle(STEPS[n]) }) });
+    }, token),
+    new Promise((resolve) => token.onCancellationRequested(() => resolve(cancelled))),
+  ]));
+  if (run === cancelled) {
+    app.log('Chẩn đoán kết nối: đã huỷ.');
+    return;
+  }
+  const { target, results } = run;
   reportText = buildReport({ info: environmentInfo(), target, results });
   const uri = vscode.Uri.from({ scheme: SCHEME, path: `/${t('diag.document.name')}` });
   reportChanged.fire(uri);

@@ -61,7 +61,7 @@ class ChatView {
     const core = this.host.core();
     const v = core && IMAGE_ID.test(id) ? await core.getChatMedia(id) : null;
     if (!v || !EXT[v.mime]) {
-      vscode.window.showWarningMessage(t('chat.image.gone'));
+      vscode.window.showInformationMessage(t('chat.image.gone'));
       return;
     }
     const file = path.join(os.tmpdir(), 'lan-collab-chat', `${id}.${EXT[v.mime]}`);

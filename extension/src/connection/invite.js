@@ -34,8 +34,9 @@ function inviteProblem(value) {
 }
 
 // {inv, reached}: a decoded invite the hub accepts and the address that answered, or null after telling the
-// member why not.
-async function askInvite(app, codeArg) {
+// member why not. The refusal toast does not hold the command: its buttons start `again(code)` with the same code
+// or with none, so a new one is asked for.
+async function askInvite(app, codeArg, again) {
   const code = typeof codeArg === 'string' ? codeArg : await vscode.window.showInputBox({
     prompt: t('join.input.prompt'),
     placeHolder: t('join.input.placeholder'),
@@ -48,7 +49,12 @@ async function askInvite(app, codeArg) {
   const title = t('join.progress.probe', { host: inv.hosts[0], port: inv.port });
   const reached = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => probe(inv, app.log));
   if (reached.error) {
-    vscode.window.showErrorMessage(reached.error);
+    const retry = t('action.retry');
+    const paste = t('action.paste_invite');
+    vscode.window.showErrorMessage(reached.error, retry, paste).then((pick) => {
+      if (pick === retry) again(code);
+      else if (pick === paste) again();
+    });
     return null;
   }
   return { inv, reached };
@@ -57,10 +63,13 @@ async function askInvite(app, codeArg) {
 async function join(app, codeArg) {
   const s = app.controller.state;
   if (ACTIVE.has(s.name)) {
-    vscode.window.showWarningMessage(s.target ? t('join.error.connected', { project: s.target.project }) : t('connect.busy'));
+    const disconnect = t('menu.disconnect');
+    vscode.window.showWarningMessage(s.target ? t('join.error.connected', { project: s.target.project }) : t('connect.busy'), disconnect).then((pick) => {
+      if (pick) app.controller.disconnect();
+    });
     return;
   }
-  const asked = await askInvite(app, codeArg);
+  const asked = await askInvite(app, codeArg, (code) => join(app, code));
   if (!asked) return;
   const { inv, reached } = asked;
 
@@ -84,10 +93,10 @@ async function join(app, codeArg) {
 }
 
 // A new invite for the folder already open: replaces its hub record and connects again, no folder picking.
-async function pasteInvite(app) {
+async function pasteInvite(app, codeArg) {
   const folder = config.workspaceFolder();
-  if (!folder) return join(app);
-  const asked = await askInvite(app);
+  if (!folder) return join(app, codeArg);
+  const asked = await askInvite(app, codeArg, (code) => pasteInvite(app, code));
   if (!asked) return;
   await config.saveJoin(app.context, folder.uri, asked.inv, asked.reached);
   app.controller.reconnect();
@@ -97,7 +106,12 @@ async function copyInvite(app) {
   const folder = config.workspaceFolder();
   const conn = folder && config.connectionFor(app.context, folder);
   if (!conn) {
-    vscode.window.showWarningMessage(t('connect.unbound'));
+    const joinLabel = t('action.join');
+    const setup = t('action.open_settings');
+    vscode.window.showWarningMessage(t('connect.unbound'), joinLabel, setup).then((pick) => {
+      if (pick === joinLabel) join(app);
+      else if (pick) vscode.commands.executeCommand('lanCollab.openConnection');
+    });
     return;
   }
   const token = await config.tokenFor(app.context, folder);

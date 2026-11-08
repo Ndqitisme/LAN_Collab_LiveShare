@@ -65,7 +65,7 @@ class SyncPanel {
     const p = this.pending;
     if (!p || !m) return;
     if (m.type === 'ready') this._postInit();
-    else if (m.type === 'painted') this.app.log(`Bảng đồng bộ đã hiện ${Date.now() - this.syncingAt} ms sau welcome, kế hoạch xong sau ${p.askedAt - this.syncingAt} ms (${p.info.conflicts.length} xung đột, ${p.info.replace.length} file khác bản trên hub).`);
+    else if (m.type === 'painted') this.app.log(`Bảng đồng bộ đã hiện ${Date.now() - this.syncingAt} ms sau welcome, kế hoạch xong sau ${p.askedAt - this.syncingAt} ms (${p.info.conflicts.length} xung đột, ${p.info.replace.length} file khác bản trên hub).`, 'debug');
     else if (m.type === 'preview') this._preview(p, String(m.path || ''), m.mode === 'merge' ? 'merge' : 'diff');
     else if (m.type === 'cancel') this._finish(false);
     else if (m.type === 'sync') {
@@ -101,7 +101,10 @@ class SyncPanel {
     const other = mode === 'merge' ? await p.info.mergedText(rel) : await p.info.hubText(rel);
     if (this.pending !== p) return;
     if (local === null || other === null) {
-      vscode.window.showWarningMessage(t('sync.preview.failed', { path: rel }));
+      const retry = t('action.retry');
+      vscode.window.showWarningMessage(t('sync.preview.failed', { path: rel }), retry).then((pick) => {
+        if (pick && this.pending === p) this._preview(p, rel, mode);
+      });
       return;
     }
     const left = mode === 'merge' ? this._doc(p, 'local', rel, local) : this._doc(p, 'hub', rel, other);

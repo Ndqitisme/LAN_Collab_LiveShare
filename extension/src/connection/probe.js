@@ -11,7 +11,7 @@ async function probe(inv, log) {
   try {
     won = await resolve({ addresses: inv.hosts, lastGood: null, port: inv.port, instanceId: inv.instanceId, tlsFingerprint: inv.fingerprint });
   } catch (err) {
-    log(`Kiểm tra mã mời: ${err.message}`);
+    log(`Kiểm tra mã mời: ${err.message}`, 'warn');
     return { error: problemText(err.code, err.data) };
   }
   const where = { host: won.host, port: won.port, project: inv.project, proto: PROTO_V2 };
@@ -20,10 +20,10 @@ async function probe(inv, log) {
     // Account rules are checked again with the real account.
     const problem = probeProblem(msg, true);
     if (!problem) return { host: won.host, port: won.port, instanceId: typeof msg.instanceId === 'string' ? msg.instanceId : null };
-    log(`Kiểm tra ${won.host}:${won.port}: LAN Hub từ chối (${problem.code || problem.data.message}).`);
+    log(`Kiểm tra ${won.host}:${won.port}: LAN Hub từ chối (${problem.code || problem.data.message}).`, 'warn');
     return { error: problem.data.message || problemText(problem.code, { ...problem.data, ...where }) };
   } catch (err) {
-    log(`Kiểm tra ${won.host}:${won.port}: ${err.message}`);
+    log(`Kiểm tra ${won.host}:${won.port}: ${err.message}`, 'warn');
     return { error: problemText(err.code, where) };
   } finally {
     won.socket.destroy();
