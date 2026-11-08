@@ -1,12 +1,14 @@
 //! `AdminApi`, the one surface a user interface manages a hub through (plan README section 5.2). The
-//! desktop app (A7) calls `LocalAdmin` in the same process; the remote client of A10 implements the same
-//! trait over the admin channel.
+//! desktop app calls `LocalAdmin` for the hub in its own process and `RemoteAdmin` (`admin_remote`) for a
+//! headless hub over the admin channel; `AnyAdmin` holds either, because a trait of async functions cannot
+//! be a trait object.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::admin_remote::RemoteAdmin;
 use crate::allow;
 use crate::config::Config;
 use crate::history::{HistoryUsage, RetentionReport};
@@ -14,15 +16,23 @@ use crate::logs::{self, LogRecord};
 use crate::project::ClientInfo;
 use crate::registry::{AdminError, ApplyReport, InviteCodes, ProjectStatus, Registry};
 
+/// Every call can fail with `AdminError::Remote` when the hub is remote; a local hub fails only where the
+/// project is unknown or not running.
 pub trait AdminApi {
     /// Every configured project, disabled and failed ones included, in config order.
-    fn list_projects(&self) -> impl Future<Output = Vec<ProjectStatus>> + Send;
+    fn list_projects(&self) -> impl Future<Output = Result<Vec<ProjectStatus>, AdminError>> + Send;
     /// The project with this name, ignoring case.
-    fn project_status(&self, name: &str) -> impl Future<Output = Option<ProjectStatus>> + Send;
+    fn project_status(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<ProjectStatus>, AdminError>> + Send;
     /// Makes the hub match `config`, touching only what differs (see `registry`).
-    fn apply_config(&self, config: Config) -> impl Future<Output = ApplyReport> + Send;
-    /// A new random token for the project, in force for the next join. The caller saves it to the
-    /// config file.
+    fn apply_config(
+        &self,
+        config: Config,
+    ) -> impl Future<Output = Result<ApplyReport, AdminError>> + Send;
+    /// A new random token for the project, in force for the next join. The local hub leaves saving it to
+    /// the caller; a remote hub writes it to its own config file.
     fn rotate_token(&self, name: &str) -> impl Future<Output = Result<String, AdminError>> + Send;
     /// The members connected to the project.
     fn clients(
@@ -30,7 +40,11 @@ pub trait AdminApi {
         name: &str,
     ) -> impl Future<Output = Result<Vec<ClientInfo>, AdminError>> + Send;
     /// Up to `limit` log records written after record `after` (0 for the oldest kept), oldest first.
-    fn logs(&self, after: u64, limit: usize) -> impl Future<Output = Vec<LogRecord>> + Send;
+    fn logs(
+        &self,
+        after: u64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<LogRecord>, AdminError>> + Send;
     /// Disk use of the project's history; `None` when the project runs without history.
     fn history_usage(
         &self,
@@ -47,15 +61,16 @@ pub trait AdminApi {
         &self,
         name: &str,
     ) -> impl Future<Output = Result<InviteCodes, AdminError>> + Send;
-    /// The projects a 0.1 hub folder configures, each marked when a project of that name exists.
+    /// The projects a 0.1 hub folder on the hub's machine configures, each marked when a project of that
+    /// name exists. `Err` inside when the folder cannot be read (the reason is in the hub's log).
     fn import_legacy(
         &self,
         dir: &Path,
-    ) -> impl Future<Output = std::io::Result<Vec<LegacyProject>>> + Send;
+    ) -> impl Future<Output = Result<std::io::Result<Vec<LegacyProject>>, AdminError>> + Send;
 }
 
 /// A project of a 0.1 hub folder: `token-<name>.txt`, and `allowed-accounts-<name>.txt` when present.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyProject {
     pub name: String,
@@ -144,16 +159,16 @@ impl LocalAdmin {
 }
 
 impl AdminApi for LocalAdmin {
-    async fn list_projects(&self) -> Vec<ProjectStatus> {
-        self.registry.list_projects().await
+    async fn list_projects(&self) -> Result<Vec<ProjectStatus>, AdminError> {
+        Ok(self.registry.list_projects().await)
     }
 
-    async fn project_status(&self, name: &str) -> Option<ProjectStatus> {
-        self.registry.project_status(name).await
+    async fn project_status(&self, name: &str) -> Result<Option<ProjectStatus>, AdminError> {
+        Ok(self.registry.project_status(name).await)
     }
 
-    async fn apply_config(&self, config: Config) -> ApplyReport {
-        self.registry.apply(config).await
+    async fn apply_config(&self, config: Config) -> Result<ApplyReport, AdminError> {
+        Ok(self.registry.apply(config).await)
     }
 
     async fn rotate_token(&self, name: &str) -> Result<String, AdminError> {
@@ -164,8 +179,8 @@ impl AdminApi for LocalAdmin {
         self.registry.clients(name).await
     }
 
-    async fn logs(&self, after: u64, limit: usize) -> Vec<LogRecord> {
-        logs::since(after, limit)
+    async fn logs(&self, after: u64, limit: usize) -> Result<Vec<LogRecord>, AdminError> {
+        Ok(logs::since(after, limit))
     }
 
     async fn history_usage(&self, name: &str) -> Result<Option<HistoryUsage>, AdminError> {
@@ -183,7 +198,10 @@ impl AdminApi for LocalAdmin {
         self.registry.invite_codes(name).await
     }
 
-    async fn import_legacy(&self, dir: &Path) -> std::io::Result<Vec<LegacyProject>> {
+    async fn import_legacy(
+        &self,
+        dir: &Path,
+    ) -> Result<std::io::Result<Vec<LegacyProject>>, AdminError> {
         let existing: Vec<String> = self
             .registry
             .list_projects()
@@ -192,8 +210,95 @@ impl AdminApi for LocalAdmin {
             .map(|p| p.name)
             .collect();
         let dir = dir.to_owned();
-        tokio::task::spawn_blocking(move || scan_legacy(&dir, &existing))
-            .await
-            .map_err(std::io::Error::other)?
+        Ok(
+            tokio::task::spawn_blocking(move || scan_legacy(&dir, &existing))
+                .await
+                .unwrap_or_else(|e| Err(std::io::Error::other(e))),
+        )
+    }
+}
+
+/// The hub a screen shows: this process's own, or a remote one.
+#[derive(Clone)]
+pub enum AnyAdmin {
+    Local(LocalAdmin),
+    Remote(RemoteAdmin),
+}
+
+impl AdminApi for AnyAdmin {
+    async fn list_projects(&self) -> Result<Vec<ProjectStatus>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.list_projects().await,
+            AnyAdmin::Remote(a) => a.list_projects().await,
+        }
+    }
+
+    async fn project_status(&self, name: &str) -> Result<Option<ProjectStatus>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.project_status(name).await,
+            AnyAdmin::Remote(a) => a.project_status(name).await,
+        }
+    }
+
+    async fn apply_config(&self, config: Config) -> Result<ApplyReport, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.apply_config(config).await,
+            AnyAdmin::Remote(a) => a.apply_config(config).await,
+        }
+    }
+
+    async fn rotate_token(&self, name: &str) -> Result<String, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.rotate_token(name).await,
+            AnyAdmin::Remote(a) => a.rotate_token(name).await,
+        }
+    }
+
+    async fn clients(&self, name: &str) -> Result<Vec<ClientInfo>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.clients(name).await,
+            AnyAdmin::Remote(a) => a.clients(name).await,
+        }
+    }
+
+    async fn logs(&self, after: u64, limit: usize) -> Result<Vec<LogRecord>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.logs(after, limit).await,
+            AnyAdmin::Remote(a) => a.logs(after, limit).await,
+        }
+    }
+
+    async fn history_usage(&self, name: &str) -> Result<Option<HistoryUsage>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.history_usage(name).await,
+            AnyAdmin::Remote(a) => a.history_usage(name).await,
+        }
+    }
+
+    async fn run_retention(
+        &self,
+        name: &str,
+    ) -> Result<Option<Result<RetentionReport, String>>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.run_retention(name).await,
+            AnyAdmin::Remote(a) => a.run_retention(name).await,
+        }
+    }
+
+    async fn invite_codes(&self, name: &str) -> Result<InviteCodes, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.invite_codes(name).await,
+            AnyAdmin::Remote(a) => a.invite_codes(name).await,
+        }
+    }
+
+    async fn import_legacy(
+        &self,
+        dir: &Path,
+    ) -> Result<std::io::Result<Vec<LegacyProject>>, AdminError> {
+        match self {
+            AnyAdmin::Local(a) => a.import_legacy(dir).await,
+            AnyAdmin::Remote(a) => a.import_legacy(dir).await,
+        }
     }
 }

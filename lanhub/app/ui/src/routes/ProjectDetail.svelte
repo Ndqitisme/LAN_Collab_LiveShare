@@ -23,7 +23,7 @@
   import { api } from '../lib/api';
   import { ago, when } from '../lib/format';
   import { stateLook } from '../lib/look';
-  import { attempt, clock, hub } from '../lib/state.svelte';
+  import { attempt, clock, hub, isRemote } from '../lib/state.svelte';
   import ProjectForm from './ProjectForm.svelte';
   import Access from './project/Access.svelte';
   import History from './project/History.svelte';
@@ -106,9 +106,11 @@
                   <dt>{t('detail.folder')}</dt>
                   <dd class="path">
                     <span class="selectable" title={project.root}>{project.root}</span>
-                    <Button size="sm" variant="ghost" icon="external-link" onclick={() => attempt(() => api.openFolder(project.root))}>
-                      {t('detail.openFolder')}
-                    </Button>
+                    {#if !isRemote()}
+                      <Button size="sm" variant="ghost" icon="external-link" onclick={() => attempt(() => api.openFolder(project.root))}>
+                        {t('detail.openFolder')}
+                      </Button>
+                    {/if}
                   </dd>
                 </div>
                 <div class="fact">

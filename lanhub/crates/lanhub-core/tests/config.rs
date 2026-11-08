@@ -218,3 +218,46 @@ fn config_unreadable_file_has_no_line() {
     let e = config::load(Path::new("no/such/lanhub.toml")).unwrap_err();
     assert_eq!(e.line, 0);
 }
+
+#[test]
+fn config_reads_hub_admin_and_keeps_only_the_hash() {
+    let token = "0123456789abcdef-admin";
+    let hash = lanhub_core::admin_server::token_hash(token);
+    let c = config::parse(
+        &format!("[hub.admin]\nremote = true\ntoken = \"{token}\"\n"),
+        &file(),
+    )
+    .unwrap();
+    assert!(c.hub.admin.remote);
+    assert_eq!(c.hub.admin.token_sha256, Some(hash));
+    let shown = format!("{:?} {}", c, serde_json::to_string(&c.hub).unwrap());
+    assert!(!shown.contains(token) && !shown.contains(&lanhub_core::util::hex(&hash)));
+    let hex = lanhub_core::util::hex(&hash).to_uppercase();
+    let c = config::parse(
+        &format!("[hub.admin]\nremote = true\ntoken_sha256 = \"{hex}\"\n"),
+        &file(),
+    )
+    .unwrap();
+    assert_eq!(c.hub.admin.token_sha256, Some(hash));
+    assert!(!config::parse("", &file()).unwrap().hub.admin.remote);
+}
+
+#[test]
+fn config_refuses_a_remote_admin_without_a_usable_token() {
+    for (text, line) in [
+        ("[hub.admin]\nremote = true\n", 2),
+        ("[hub.admin]\nremote = true\ntoken = \"short\"\n", 3),
+        ("[hub.admin]\ntoken_sha256 = \"abc\"\n", 2),
+        (
+            "[hub.admin]\nremote = true\ntoken = \"0123456789abcdef\"\ntoken_sha256 = \"00\"\n",
+            4,
+        ),
+    ] {
+        let e = err(text);
+        assert_eq!(
+            (e.line, e.key.as_deref()),
+            (line, Some("hub.admin")),
+            "{text}"
+        );
+    }
+}

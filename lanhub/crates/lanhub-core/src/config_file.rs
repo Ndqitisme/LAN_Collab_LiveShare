@@ -1,4 +1,4 @@
-//! Edits of `lanhub.toml` from the UI. Each edit re-reads the file, changes only the `[[project]]` table or the
+//! Edits of `lanhub.toml` from the app, locally or through the admin channel. Each edit re-reads the file, changes only the `[[project]]` table or the
 //! `[hub]` keys it is about (comments, key order and keys this version does not know stay as written),
 //! validates the result with the same parser the hub uses, and writes it atomically. The caller applies the
 //! returned `Config`.
@@ -6,8 +6,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use lanhub_core::config::{self, Config, ConfigError, HubSettings, TlsSettings};
-use lanhub_core::util::random_hex;
+use crate::config::{
+    self, AdminSettings, Config, ConfigError, HubSettings, ProjectConfig, TlsSettings,
+};
+use crate::exclude::{DEFAULT_EXCLUDE, Excluder};
+use crate::files;
+use crate::logs;
+use crate::util::{self, random_hex};
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, value};
 
@@ -166,7 +171,7 @@ impl ConfigFile {
 
     fn read_for_edit(&self) -> Result<(DocumentMut, Config), AppError> {
         self.read().map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Không sửa được cấu hình: {e}"));
+            logs::log_in(None, &format!("[LỖI] Không sửa được cấu hình: {e}"));
             AppError::new("configInvalid")
         })
     }
@@ -175,11 +180,11 @@ impl ConfigFile {
     fn commit(&self, doc: &DocumentMut) -> Result<Config, AppError> {
         let text = doc.to_string();
         let cfg = config::parse(&text, &self.path).map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
+            logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
             AppError::new("configInvalid")
         })?;
-        lanhub_core::flush::write_file_atomic(&self.path, text.as_bytes()).map_err(|e| {
-            lanhub_core::logs::log_in(
+        crate::flush::write_file_atomic(&self.path, text.as_bytes()).map_err(|e| {
+            logs::log_in(
                 None,
                 &format!("[LỖI] Không ghi được {}: {e}", self.path.display()),
             );
@@ -308,7 +313,7 @@ impl ConfigFile {
         }
         let text = doc.to_string();
         let parsed = config::parse(&text, &self.path).map_err(|e| {
-            lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
+            logs::log_in(None, &format!("[LỖI] Cấu hình mới không hợp lệ: {e}"));
             AppError::new("configInvalid")
         })?;
         check(&parsed)?;
@@ -429,7 +434,7 @@ impl ConfigFile {
             t.insert("advertise", value(true));
             projects_mut(&mut doc)?.push(t);
             cfg = config::parse(&doc.to_string(), &self.path).map_err(|e| {
-                lanhub_core::logs::log_in(None, &format!("[LỖI] Cấu hình nhập không hợp lệ: {e}"));
+                logs::log_in(None, &format!("[LỖI] Cấu hình nhập không hợp lệ: {e}"));
                 AppError::new("configInvalid")
             })?;
             added.push(name);
@@ -449,6 +454,156 @@ impl ConfigFile {
         }
         self.commit(&doc)
     }
+}
+
+/// The `[hub]` settings as the hub settings screen shows them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSettingsView {
+    pub name: String,
+    /// What the hub calls itself while `name` is empty.
+    pub hostname: String,
+    pub bind: String,
+    pub port: u16,
+    pub discovery: bool,
+    pub discovery_port: u16,
+    pub tls: bool,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub public_address: Vec<String>,
+    /// SHA-256 of the certificate the hub serves; `None` while TLS is off.
+    pub fingerprint: Option<String>,
+}
+
+impl HubSettingsView {
+    pub fn new(hub: &HubSettings, fingerprint: Option<String>) -> HubSettingsView {
+        let path = |p: &Option<PathBuf>| {
+            p.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        HubSettingsView {
+            name: hub.name.clone().unwrap_or_default(),
+            hostname: util::hostname(),
+            bind: hub.bind.clone(),
+            port: hub.port,
+            discovery: hub.discovery,
+            discovery_port: hub.discovery_port,
+            tls: hub.tls.enabled,
+            tls_cert: path(&hub.tls.cert),
+            tls_key: path(&hub.tls.key),
+            public_address: hub.public_address.clone(),
+            fingerprint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InviteView {
+    pub name: String,
+    pub code: String,
+}
+
+/// Files an exclude preview lists at most; the total is counted in full.
+pub const PREVIEW_MAX: usize = 200;
+
+/// What the project screens edit, as the hub runs it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettings {
+    pub token: String,
+    pub allow: Vec<String>,
+    /// A 0.1 allow file the hub also reads on every join.
+    pub allow_file: Option<PathBuf>,
+    pub exclude: Vec<String>,
+    pub default_exclude: Vec<String>,
+    pub history_enabled: bool,
+    pub history: HistoryInput,
+}
+
+impl ProjectSettings {
+    /// The settings of the project named `name` (ignoring case) in `cfg`.
+    pub fn of(cfg: &Config, name: &str) -> Result<ProjectSettings, AppError> {
+        let p = project_config(cfg, name)?;
+        Ok(ProjectSettings {
+            token: p.token.clone(),
+            allow: p.allow.clone(),
+            allow_file: p.allow_file.clone(),
+            exclude: p.exclude.clone(),
+            default_exclude: DEFAULT_EXCLUDE.iter().map(|s| (*s).to_owned()).collect(),
+            history_enabled: p.history.enabled,
+            history: HistoryInput {
+                idle_minutes: p.history.idle_minutes,
+                keep_days: p.history.keep_days,
+                max_mb: p.history.max_mb,
+            },
+        })
+    }
+}
+
+/// The project named `name` (ignoring case) in `cfg`.
+pub fn project_config<'a>(cfg: &'a Config, name: &str) -> Result<&'a ProjectConfig, AppError> {
+    let key = name.trim().to_lowercase();
+    cfg.projects
+        .iter()
+        .find(|p| p.name.to_lowercase() == key)
+        .ok_or_else(|| AppError::new("unknownProject").param("name", name))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludePreview {
+    /// The first `PREVIEW_MAX` matching files, sorted.
+    pub files: Vec<String>,
+    pub total: usize,
+    /// Files the project would sync with only the default patterns.
+    pub scanned: usize,
+}
+
+/// The files under `root` that `lines` would stop syncing, among those the default patterns leave in.
+/// Walks the folder: call it off the async threads.
+pub fn exclude_preview(root: &Path, lines: &[String]) -> Result<ExcludePreview, AppError> {
+    if !root.is_dir() {
+        return Err(AppError::field("rootMissing", "root"));
+    }
+    let synced = files::walk(root, &Excluder::new(DEFAULT_EXCLUDE));
+    let extra = Excluder::new(lines);
+    let mut matched: Vec<String> = synced
+        .iter()
+        .map(|(rel, _)| rel)
+        .filter(|rel| extra.is_excluded(rel))
+        .cloned()
+        .collect();
+    matched.sort();
+    let total = matched.len();
+    matched.truncate(PREVIEW_MAX);
+    Ok(ExcludePreview {
+        files: matched,
+        total,
+        scanned: synced.len(),
+    })
+}
+
+/// Refuses settings that the running hub would only log and skip: a port it cannot open, a certificate it
+/// cannot load. `running` is the `[hub]` the hub runs now; unchanged parts are not checked again.
+pub fn check_hub(new: &HubSettings, running: Option<&HubSettings>) -> Result<(), AppError> {
+    let moved = running.is_none_or(|r| r.bind != new.bind || r.port != new.port);
+    if moved && let Err(e) = std::net::TcpListener::bind((new.bind.as_str(), new.port)) {
+        logs::log_in(
+            None,
+            &format!("[LỖI] Không mở được {}:{}: {e}", new.bind, new.port),
+        );
+        return Err(AppError::field("portBusy", "port").param("port", new.port.to_string()));
+    }
+    let tls_changed = running.is_none_or(|r| r.tls != new.tls || r.state_dir != new.state_dir);
+    if new.tls.enabled
+        && tls_changed
+        && let Err(e) = crate::tls::load_or_create(&new.tls, new.state_dir.as_deref())
+    {
+        logs::log_in(None, &format!("[LỖI] Không bật được TLS: {e}"));
+        return Err(AppError::field("tlsFailed", "tls"));
+    }
+    Ok(())
 }
 
 /// Writes `new` unless it names the folder already written; removes the key for `None`.
@@ -522,6 +677,7 @@ fn validate_hub(input: &HubInput) -> Result<HubSettings, AppError> {
             cert,
             key,
         },
+        admin: AdminSettings::default(),
         state_dir: None,
     })
 }

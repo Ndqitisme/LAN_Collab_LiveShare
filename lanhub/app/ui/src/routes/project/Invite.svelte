@@ -2,9 +2,9 @@
   import { untrack } from 'svelte';
   import { Badge, Button, Card, EmptyState, Icon, IconButton } from '@lan-collab/ui-kit';
   import { t } from '../../i18n';
-  import { api, type InviteCodes, type ProjectView } from '../../lib/api';
+  import { api, hubApi, type InviteCodes, type ProjectView } from '../../lib/api';
   import QrCode from '../../lib/QrCode.svelte';
-  import { attempt, errorText, hub } from '../../lib/state.svelte';
+  import { attempt, errorText, hub, isRemote } from '../../lib/state.svelte';
 
   interface Props {
     project: ProjectView;
@@ -16,12 +16,15 @@
   // The codes change with the LAN addresses and the port, and cannot be made until the hub runs.
   const network = $derived(`${hub.snap?.hub.state}|${hub.snap?.hub.port}|${hub.snap?.hub.addresses.join(',')}`);
   let codes = $state<InviteCodes | null>(null);
+  // A remote hub's own addresses are not this machine's: there the hosts that are not public are the LAN ones.
+  let publicHosts = $state<Set<string> | null>(null);
   let loadError = $state<string | null>(null);
 
   async function load(n = name) {
     loadError = null;
     try {
       codes = await api.inviteCodes(n);
+      publicHosts = isRemote() ? new Set((await hubApi.settings()).publicAddress) : null;
     } catch (e) {
       loadError = errorText(e);
     }
@@ -38,6 +41,7 @@
   }
 
   const lan = $derived(new Set(hub.snap?.hub.addresses ?? []));
+  const isLan = (host: string) => (publicHosts ? !publicHosts.has(host) : lan.has(host));
 </script>
 
 {#if loadError}
@@ -80,8 +84,8 @@
               <li>
                 <span class="index">{i + 1}</span>
                 <span class="host selectable">{host}</span>
-                <Badge tone={lan.has(host) ? 'neutral' : 'accent'}>
-                  {lan.has(host) ? t('invite.lan') : t('invite.public')}
+                <Badge tone={isLan(host) ? 'neutral' : 'accent'}>
+                  {isLan(host) ? t('invite.lan') : t('invite.public')}
                 </Badge>
               </li>
             {/each}

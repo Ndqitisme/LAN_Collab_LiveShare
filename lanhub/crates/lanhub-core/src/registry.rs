@@ -13,12 +13,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
-use serde::Serialize;
+use lanhub_protocol::AdminFailure;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, HubSettings, ProjectConfig, TlsSettings};
+use crate::admin_server::{AdminDoor, HubAdmin};
+use crate::config::{AdminSettings, Config, HubSettings, ProjectConfig, TlsSettings};
 use crate::exclude::{DEFAULT_EXCLUDE, Excluder};
 use crate::files::{is_text, uniform_eol, walk};
 use crate::history::{HistoryUsage, RetentionReport};
@@ -34,7 +36,7 @@ use crate::{HUB_VERSION, allow, chat, discovery, identity, invite, tls};
 const INBOX: usize = 1024;
 const EVENTS: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EventKind {
     Started,
@@ -43,7 +45,7 @@ pub enum EventKind {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectEvent {
     pub project: String,
     pub kind: EventKind,
@@ -51,12 +53,12 @@ pub struct ProjectEvent {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyReport {
     pub events: Vec<ProjectEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectState {
     Running,
@@ -64,7 +66,7 @@ pub enum ProjectState {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatus {
     pub name: String,
@@ -84,7 +86,7 @@ pub struct ProjectStatus {
 }
 
 /// The invite codes of one project (`Registry::invite_codes`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InviteCodes {
     /// The `LC3-` code; `None` when the hub knows no address to put in it.
@@ -97,7 +99,7 @@ pub struct InviteCodes {
     pub legacy: Vec<LegacyInvite>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LegacyInvite {
     pub host: String,
     pub code: String,
@@ -107,6 +109,8 @@ pub struct LegacyInvite {
 pub enum AdminError {
     UnknownProject(String),
     NotRunning(String),
+    /// A remote hub could not be reached or refused the call (`admin_remote`).
+    Remote(AdminFailure),
 }
 
 impl std::fmt::Display for AdminError {
@@ -114,6 +118,7 @@ impl std::fmt::Display for AdminError {
         match self {
             AdminError::UnknownProject(p) => write!(f, "no project named \"{p}\""),
             AdminError::NotRunning(p) => write!(f, "project \"{p}\" is not running"),
+            AdminError::Remote(e) => write!(f, "remote hub: {}", e.code),
         }
     }
 }
@@ -170,6 +175,8 @@ struct State {
     public_address: Vec<String>,
     hub_name: String,
     features: Vec<String>,
+    admin: AdminSettings,
+    admin_host: Option<Arc<HubAdmin>>,
     projects: Vec<Entry>,
     next_gen: u64,
 }
@@ -246,6 +253,17 @@ impl Registry {
         tls_identity(&st).map(|t| t.fingerprint.clone())
     }
 
+    /// Lets `admin_hello` in when `[hub.admin] remote` is on, answered by `host`. Without a host the channel
+    /// stays refused whatever the config says: only `lanhub-cli` serves it.
+    pub async fn set_admin_host(&self, host: HubAdmin) {
+        let mut st = self.inner.state.lock().await;
+        st.admin_host = Some(Arc::new(host));
+        if st.admin.remote {
+            log_in(None, "Đã bật quản trị từ xa");
+        }
+        self.publish(&st);
+    }
+
     /// Project starts, stops, changes and failures as they happen, for a live status view.
     pub fn subscribe(&self) -> broadcast::Receiver<ProjectEvent> {
         self.inner.events.subscribe()
@@ -270,11 +288,23 @@ impl Registry {
         self.apply_listener(st, &config.hub, first).await?;
         self.apply_discovery(st, &config.hub).await;
         st.public_address = config.hub.public_address.clone();
+        if config.hub.admin.remote != st.admin.remote && st.admin_host.is_some() {
+            log_in(
+                None,
+                if config.hub.admin.remote {
+                    "Đã bật quản trị từ xa"
+                } else {
+                    "Đã tắt quản trị từ xa"
+                },
+            );
+        }
+        st.admin = config.hub.admin.clone();
         let hub_name = config.hub.name.clone().unwrap_or_else(util::hostname);
         let mut features = vec![
             "chat-image".to_owned(),
             "multi-project".to_owned(),
             "http-diag".to_owned(),
+            "admin".to_owned(),
         ];
         if st.discovery.as_ref().is_some_and(|d| d.task.is_some()) {
             features.push("discovery".to_owned());
@@ -756,6 +786,19 @@ impl Registry {
             instance_id: self.inner.instance_id.clone(),
             tls: tls_identity(st).cloned(),
             started_at: self.inner.started_at,
+            admin: match (&st.admin, &st.admin_host) {
+                (
+                    AdminSettings {
+                        remote: true,
+                        token_sha256: Some(hash),
+                    },
+                    Some(host),
+                ) => Some(Arc::new(AdminDoor {
+                    token_sha256: *hash,
+                    host: host.clone(),
+                })),
+                _ => None,
+            },
             ..Table::default()
         };
         for e in &st.projects {
@@ -911,6 +954,7 @@ impl Registry {
     /// Stops accepting, writes every pending file of every project and stops their actors.
     pub async fn stop(&self) {
         let mut st = self.inner.state.lock().await;
+        st.admin_host = None;
         if let Some(l) = st.listener.take() {
             l.accept.abort();
         }

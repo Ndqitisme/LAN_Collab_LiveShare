@@ -75,7 +75,7 @@ pub struct ProjectInfo {
 }
 
 /// A connected member, as `AdminApi::clients` reports it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
     pub id: String,

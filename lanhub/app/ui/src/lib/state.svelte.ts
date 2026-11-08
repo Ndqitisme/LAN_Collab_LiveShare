@@ -1,11 +1,34 @@
 // App-wide reactive state: the latest hub snapshot, toasts, a clock for relative times, and the theme.
-import { api, isAppError, onNotice, onStatus, type Snapshot } from './api';
+import { api, hubsApi, isAppError, onNotice, onStatus, type HubsView, type Snapshot } from './api';
 import { t, tDynamic, type Key, type Params } from '../i18n';
 
 export const hub = $state<{ snap: Snapshot | null }>({ snap: null });
 
+/** The hub switcher: this machine's hub and the remote hubs. */
+export const hubs = $state<{ view: HubsView }>({ view: { selected: null, remotes: [] } });
+
+/** The window shows a remote hub: actions on this machine's folders, firewall and sign-in do not apply. */
+export function isRemote(): boolean {
+  return !!hub.snap?.hubId;
+}
+
+export async function loadHubs(): Promise<void> {
+  hubs.view = await hubsApi.list();
+}
+
+/** Selects a hub (null for this machine's) and shows its snapshot. */
+export async function selectHub(id: string | null): Promise<void> {
+  hub.snap = await hubsApi.select(id);
+  await loadHubs();
+}
+
 export async function connect(): Promise<void> {
-  await onStatus((s) => (hub.snap = s));
+  await onStatus((s) => {
+    const switched = (s.hubId ?? null) !== (hub.snap?.hubId ?? null) || s.hub.state !== hub.snap?.hub.state;
+    hub.snap = s;
+    if (switched) loadHubs().catch(() => {});
+  });
+  await loadHubs().catch(() => {});
   await onNotice((n) => toast(n.error ? 'danger' : 'ok', tDynamic(n.code, n.params)));
   const first = await api.status();
   hub.snap ??= first;

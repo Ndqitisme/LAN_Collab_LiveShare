@@ -1,7 +1,9 @@
 // The log lines the Logs tab shows, pulled from the hub's ring of structured records. Polling starts when
 // the tab first opens and keeps the newest MAX lines, more than the ring holds, so a long session can be
-// searched and exported. The array is plain; `logState.version` is what views depend on.
+// searched and exported. The array is plain; `logState.version` is what views depend on. The lines are of
+// the selected hub: switching hubs starts over from that hub's oldest kept record.
 import { api, type LogLevel, type LogRecord } from './api';
+import { hub } from './state.svelte';
 
 const MAX = 50_000;
 const BATCH = 5_000;
@@ -23,6 +25,8 @@ export interface LogLine {
 let lines: LogLine[] = [];
 let after = 0;
 let started = false;
+/** The hub the lines are of: a remote hub's id, or null for this machine's. */
+let source: string | null = null;
 
 export const logState = $state({ version: 0 });
 
@@ -51,10 +55,20 @@ function line(r: LogRecord): LogLine {
   };
 }
 
+const selected = () => hub.snap?.hubId ?? null;
+
 async function pull(): Promise<void> {
+  const from = selected();
+  if (from !== source) {
+    source = from;
+    lines = [];
+    after = 0;
+    logState.version++;
+  }
   let added = false;
   for (;;) {
     const batch = await api.logs(after, BATCH);
+    if (selected() !== from) return;
     if (batch.length === 0) break;
     after = batch[batch.length - 1].seq;
     for (const r of batch) lines.push(line(r));

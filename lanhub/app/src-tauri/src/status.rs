@@ -5,10 +5,11 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use lanhub_core::registry::ProjectState;
+use lanhub_core::registry::{ProjectState, ProjectStatus};
 use lanhub_core::util;
 use serde::Serialize;
 
+use crate::config_file::AppError;
 use crate::service::Inputs;
 
 pub const EVERY: Duration = Duration::from_millis(500);
@@ -20,6 +21,10 @@ const ADDRESSES_EVERY: Duration = Duration::from_secs(10);
 pub struct Snapshot {
     pub hub: HubView,
     pub projects: Vec<ProjectView>,
+    /// The remote hub this snapshot is of; `None` for this machine's hub.
+    pub hub_id: Option<String>,
+    /// Why the remote hub is offline.
+    pub remote_error: Option<AppError>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -29,6 +34,8 @@ pub enum HubState {
     Running,
     BindError,
     ConfigError,
+    /// A remote hub that cannot be reached or refused the session.
+    Offline,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -156,28 +163,7 @@ impl Sampler {
         let projects: Vec<ProjectView> = match inputs.statuses {
             Some(list) => list
                 .into_iter()
-                .map(|s| {
-                    let state = match s.state {
-                        ProjectState::Running => ViewState::Running,
-                        ProjectState::Disabled => ViewState::Disabled,
-                        ProjectState::Failed => ViewState::Failed,
-                    };
-                    let rate = self.rate(&s.name, s.started_at, s.ops, now);
-                    ProjectView {
-                        root_missing: state == ViewState::Failed && !s.root.is_dir(),
-                        enabled: state != ViewState::Disabled,
-                        name: s.name,
-                        root: s.root,
-                        state,
-                        advertise: s.advertise,
-                        error: s.error,
-                        files: s.files,
-                        clients: s.clients,
-                        rate,
-                        last_activity: s.last_activity,
-                        started_at: s.started_at,
-                    }
-                })
+                .map(|s| self.project_view(s, now, true))
                 .collect(),
             None => inputs
                 .config
@@ -204,8 +190,88 @@ impl Sampler {
                 })
                 .collect(),
         };
+        self.forget_gone(&projects);
+        Snapshot {
+            hub,
+            projects,
+            hub_id: None,
+            remote_error: None,
+        }
+    }
+
+    fn project_view(&mut self, s: ProjectStatus, now: Instant, local: bool) -> ProjectView {
+        let state = match s.state {
+            ProjectState::Running => ViewState::Running,
+            ProjectState::Disabled => ViewState::Disabled,
+            ProjectState::Failed => ViewState::Failed,
+        };
+        let rate = self.rate(&s.name, s.started_at, s.ops, now);
+        ProjectView {
+            // A remote folder cannot be looked at from here; its error says what happened.
+            root_missing: local && state == ViewState::Failed && !s.root.is_dir(),
+            enabled: state != ViewState::Disabled,
+            name: s.name,
+            root: s.root,
+            state,
+            advertise: s.advertise,
+            error: s.error,
+            files: s.files,
+            clients: s.clients,
+            rate,
+            last_activity: s.last_activity,
+            started_at: s.started_at,
+        }
+    }
+
+    fn forget_gone(&mut self, projects: &[ProjectView]) {
         self.rings
             .retain(|k, _| projects.iter().any(|p| p.name.to_lowercase() == *k));
-        Snapshot { hub, projects }
+    }
+
+    /// A remote hub: its projects when `statuses` came back, else offline with the reason and the projects
+    /// last seen.
+    pub fn snapshot_remote(
+        &mut self,
+        id: &str,
+        host: &str,
+        port: u16,
+        config_path: PathBuf,
+        statuses: Result<Vec<ProjectStatus>, AppError>,
+        last: Option<&Snapshot>,
+    ) -> Snapshot {
+        let now = Instant::now();
+        let hub = |state| HubView {
+            state,
+            bind: host.to_owned(),
+            port,
+            addresses: vec![host.to_owned()],
+            config_path: config_path.clone(),
+            config_line: None,
+            config_message: None,
+        };
+        match statuses {
+            Ok(list) => {
+                let projects: Vec<ProjectView> = list
+                    .into_iter()
+                    .map(|s| self.project_view(s, now, false))
+                    .collect();
+                self.forget_gone(&projects);
+                Snapshot {
+                    hub: hub(HubState::Running),
+                    projects,
+                    hub_id: Some(id.to_owned()),
+                    remote_error: None,
+                }
+            }
+            Err(e) => Snapshot {
+                hub: hub(HubState::Offline),
+                projects: last
+                    .filter(|s| s.hub_id.as_deref() == Some(id))
+                    .map(|s| s.projects.clone())
+                    .unwrap_or_default(),
+                hub_id: Some(id.to_owned()),
+                remote_error: Some(e),
+            },
+        }
     }
 }

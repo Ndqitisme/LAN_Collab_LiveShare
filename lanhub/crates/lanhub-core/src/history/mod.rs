@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use lanhub_ot::{Component, TextOperation};
 use lanhub_protocol::{FileKind, HistoryBlobBody, HistoryBlobContent, HubMessage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -142,7 +142,7 @@ pub enum Job {
 }
 
 /// Disk use of a project's history, as the admin screens show it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryUsage {
     /// `history.db` with its WAL and shared-memory files.
@@ -153,7 +153,7 @@ pub struct HistoryUsage {
 }
 
 /// What a retention pass run from the admin screens removed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetentionReport {
     pub runs_deleted: u64,

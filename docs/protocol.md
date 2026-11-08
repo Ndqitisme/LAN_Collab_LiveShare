@@ -277,6 +277,7 @@ Because of the 5-second repeat, a client must not treat a presence whose `file`,
 | `history` | The history messages of section 12 work. | no | from A5 |
 | `tls` | This connection is TLS (section 13.1). | no | from A6, on a TLS connection |
 | `http-diag` | The TCP port answers `GET ` with a diagnosis page (section 13.2). | no | from A6 |
+| `admin` | The port also serves the admin channel of section 13.3 (it may still be turned off). | no | from A10 |
 | `multi-project` | The hub serves several projects on this port, chosen by `hello.project`, each with its own token, allow list and `hubId`, and adds, changes or removes projects (from `lanhub.toml`) without restarting the others. `project_unknown` and `probe_result.projects` list only advertised projects. | no | from A4 |
 
 ## 10. LAN discovery
@@ -427,6 +428,81 @@ When a connection starts with the bytes `GET `, lanhub answers with an HTTP/1.1 
 
 Details: the page also shows the hub name, uptime, and whether TLS is on with its fingerprint; it never holds a token, a folder, an instance id or a member. Every path gets the same page and no file is read. `HEAD ` gets the headers only; any other method (`POST `, `PUT `, `DELETE `, `OPTIONS `, `PATCH `, `CONNECT `, `TRACE `) gets `405`. The hub reads at most 8 KiB of the request head before it answers and closes. On a TLS hub the page answers inside TLS (`https://`) and on a plain connection alike (section 13.1).
 
+### 13.3 Admin channel (A10)
+
+lanhub serves a second kind of session on the same port: an admin session that manages the hub the way the LAN Hub app manages the hub in its own process. A connection whose first message is `admin_hello` asks for one; this is the one exception to the first-message rule of section 1. It is a lanhub-only feature listed as `admin`, and only `lanhub-cli` answers it; the LAN Hub app's own hub refuses every `admin_hello` with `disabled`. The TypeScript form of these messages is `packages/protocol/src/generated/AdminMessage.ts`.
+
+**Turning it on.** `[hub.admin]` in `lanhub.toml`, or `lanhub-cli --admin-token` (section 16):
+
+```toml
+[hub.admin]
+remote = true
+token = "a long random secret"     # at least 16 characters
+# or, so the file never holds the token itself:
+# token_sha256 = "<64 hex characters, the SHA-256 of the UTF-8 token>"
+```
+
+`remote = true` needs exactly one of `token` and `token_sha256`. The hub keeps only the SHA-256 of the token in memory, never logs the token, and compares hashes in constant time. A change of `[hub.admin]` at apply takes effect for the next `admin_hello`, and an open admin session whose token no longer matches is closed before its next call.
+
+**Opening.** The hub checks an `admin_hello` in this order and answers the first failure with `admin_refused`, then closes the connection.
+
+1. The channel is on: otherwise `disabled`.
+2. The connection is TLS (section 13.1), or comes from a loopback address: otherwise `tls_required`. A hub without TLS therefore takes admin sessions from the same machine only.
+3. The address is not blocked: otherwise `rate_limited` with `retryAfterMs`, answered at once and without looking at the token.
+4. The token matches: otherwise `token_invalid`, sent 1 second after the `admin_hello` arrived. Five wrong tokens from one IP address within 60 seconds block that address for 5 minutes. The block, the check and the count happen under one lock, so parallel connections cannot try more tokens than that. A correct token clears the address's count.
+
+The hub logs every refusal with the address, and the block with its length.
+
+| Message | Direction | Fields |
+|---|---|---|
+| `admin_hello` | client to hub, first line | `token` string |
+| `admin_welcome` | hub to client | `hubName`, `hubVersion`, `instanceId` strings, `configPath` string or `null` (the `lanhub.toml` that edits write; `null` when the hub runs from command-line flags and refuses edits) |
+| `admin_refused` | hub to client, then close | `code`: `disabled`, `tls_required`, `token_invalid` or `rate_limited`; `retryAfterMs` integer with `rate_limited` |
+| `admin_call` | client to hub | `id` integer chosen by the client, `method` string, `params` object (`{}` when the method takes none) |
+| `admin_result` | hub to client | `id` of the call, `ok` boolean, `value` (the result, `null` when there is none), `error` `{code, field, params}` when `ok` is false |
+
+**Calls.** Calls may overlap; each result carries the id of its call and results may arrive in any order. Lines of an admin session may be up to 1 MiB. A line that is not a valid `admin_call` is ignored; an unknown method or malformed `params` gets an `admin_result` with error `badRequest`.
+
+| `method` | `params` | `value` |
+|---|---|---|
+| `list_projects` | `{}` | array of project status objects (`name`, `root`, `state` of `running`, `disabled` or `failed`, `error`, `hubId`, `files`, `clients`, `ops`, `lastActivity`, `advertise`, `token`, `startedAt`), in config order |
+| `project_status` | `{name}` | one status object, or `null` for an unknown project (names ignore case) |
+| `clients` | `{name}` | array of `{id, name, account, addr, joinedAt, rtt}` |
+| `logs` | `{after, limit}` | up to `limit` (at most 2000) log records `{seq, ts, level, project, msg}` with `seq > after`, oldest first |
+| `rotate_token` | `{name}` | the new token, written to `lanhub.toml` and in force for the next join; members already in stay. From flags, it lasts until the hub restarts. |
+| `apply_config` | `{config}` | `{events}`: makes the running hub match `config` without writing the file. The hub keeps its own `[hub.admin]` and state folder. |
+| `add_project` | `{input: {name, root, enabled, advertise}}` | `null`; the hub writes a new `[[project]]` with a random token |
+| `update_project` | `{original, input}` | `null`; the token and keys the input does not name stay as written |
+| `set_project_enabled` | `{name, enabled}` | `null` |
+| `remove_project` | `{name}` | `null` |
+| `hub_settings` | `{}` | `{name, hostname, bind, port, discovery, discoveryPort, tls, tlsCert, tlsKey, publicAddress, fingerprint}` |
+| `update_hub` | `{input}` | the new `hub_settings` value; `input` has the fields of that value without `hostname` and `fingerprint` |
+| `all_invite_codes` | `{}` | `[{name, code}]` for the running projects |
+| `invite_code` | `{name}` | the `LC3-` code of one project (section 11.1); the addresses are the hub's `public_address` values, then its own IPv4 addresses |
+| `invite_codes` | `{name}` | `{code, hosts, port, tls, legacy}`: `code` is the `invite_code` value or `null` when the hub knows no address, `hosts` the addresses inside it in order, `legacy` one `{host, code}` `LC-` code per IPv4 address for 0.1 clients (empty with TLS on) |
+| `project_settings` | `{name}` | `{token, allow, allowFile, exclude, defaultExclude, historyEnabled, history: {idleMinutes, keepDays, maxMb}}` as the hub runs the project |
+| `set_allow` | `{name, lines}` | `null`; one allow entry per line, blank lines dropped, an empty list removes `allow`. A bad line fails with `allowInvalid {line}`, field `allow` |
+| `set_exclude` | `{name, lines}` | `null`; the extra exclude patterns, as `set_allow`; `excludeInvalid {line}`, field `exclude` |
+| `preview_exclude` | `{name, lines}` | `{files, total, scanned}`: the files under the project folder on the hub's machine that `lines` would stop syncing (the first 200 of `total`, sorted), among the `scanned` files the default patterns leave in |
+| `set_history` | `{name, history: {idleMinutes, keepDays, maxMb}}` | `null`; writes the limits into `[project.history]`, keeping `enabled` and other keys. Out of range fails with `outOfRange {min, max}`, field `idleMinutes`, `keepDays` or `maxMb` |
+| `history_usage` | `{name}` | `{dbBytes, blobBytes, blobCount, runs}`, or `null` when the project runs without history; `notRunning {name}` when it is not running |
+| `run_retention` | `{name}` | `{runsDeleted, blobsDeleted, bytesBefore, bytesAfter}`; `historyOff` when the project runs without history, `retentionFailed {detail}` when the pass failed |
+| `import_legacy` | `{dir}` | array of `{name, token, allow, root, exists}`: the projects of a 0.1 hub folder `dir` on the hub's machine (`token-<name>.txt`, `allowed-accounts-<name>.txt`, `ROOT` of its `.bat` launchers); `exists` when a project of that name is configured. `legacyUnreadable {path}` when the folder cannot be read |
+| `import_projects` | `{items: [{name, root, token, allow}]}` | array of the names added, in one write; a name that exists is skipped. A bad item fails with the project form's error and param `project` |
+
+Edits re-read `lanhub.toml`, change only the table they are about (comments and unknown keys stay), validate the result with the hub's own parser and the checks the app runs (a root that must exist on the hub's machine, a port it can open, a certificate it can load), write it atomically, then apply it. A hub started from command-line flags refuses them with `configReadOnly`. Error codes are the keys of `errors` in `lanhub/app/ui/src/i18n/vi.json`, for example `unknownProject {name}`, `rootMissing` with field `root`, `nameDuplicate {name}` with field `name`, `portBusy {port}`, `configInvalid`.
+
+Example:
+
+```
+→ {"t":"admin_hello","token":"…"}
+← {"t":"admin_welcome","hubName":"srv","hubVersion":"lanhub 0.2.0","instanceId":"…","configPath":"/etc/lanhub/lanhub.toml"}
+→ {"t":"admin_call","id":1,"method":"project_status","params":{"name":"web"}}
+← {"t":"admin_result","id":1,"ok":true,"value":{"name":"web","state":"running",…}}
+→ {"t":"admin_call","id":2,"method":"clients","params":{"name":"nope"}}
+← {"t":"admin_result","id":2,"ok":false,"value":null,"error":{"code":"unknownProject","field":null,"params":{"name":"nope"}}}
+```
+
 ## 14. Protocol 1 compatibility
 
 ### 14.1 Node hub (until I1)
@@ -502,6 +578,8 @@ Not part of the wire protocol. Both hubs implement it so `test/conformance/` and
 | `--tls` | lanhub only (A6), single-project mode: TLS with the self-signed certificate of section 13.1, kept in `<root>/.lan-collab/`. The hub logs `TLS fingerprint SHA256 <hex>` before the listening line. `test/conformance/tls.test.js` and the `tls_required` case run only when `LANHUB_TLS=1`. |
 | `--tls-cert <file>`, `--tls-key <file>` | lanhub only (A6), single-project mode, always together: TLS with this PEM certificate chain and private key. |
 | `--diagnose` | lanhub only (A6): read-only self-check, one line per check (`ok`, `fail` or `skip`, the check name, details, and a fix hint on `fail`) for the config, the TCP port, the discovery port, the IPv4 interfaces, TLS, and on Windows the inbound firewall rules for both ports (`netsh advfirewall firewall show rule name=all dir=in verbose`, never changed). Takes `--config` or `--root` and the port, host, discovery and TLS flags. Exits 0 when no check fails, else 1. |
+| `--admin-token <secret>` | lanhub only (feature `admin`): turns the admin channel of section 13.3 on with this token (at least 16 characters), in either mode, over `[hub.admin]`. The environment variable `LANHUB_ADMIN_TOKEN` does the same without putting the token on the command line. From flags, admin sessions read and rotate but refuse edits. |
+| `--hash-admin-token <secret>` | lanhub only: prints the `token_sha256 = "…"` line for `[hub.admin]` and exits. |
 | `--config <file>` | lanhub only (feature `multi-project`), instead of `--root`: serve the projects of a `lanhub.toml` and apply the file again whenever it changes. `--port`, `--host`, `--name`, `--discovery-port` and `--no-discovery` override its `[hub]` values. A file that does not parse at start exits with code 1; later, it is logged and the running projects stay. |
 
 A flag given without a value (followed by another `--flag` or nothing) is `true`.

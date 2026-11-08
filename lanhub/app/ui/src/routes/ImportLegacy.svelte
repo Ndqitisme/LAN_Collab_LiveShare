@@ -2,7 +2,7 @@
   import { Badge, Button, Card, Checkbox, EmptyState, Icon, Input } from '@lan-collab/ui-kit';
   import { t } from '../i18n';
   import { api, isAppError, type LegacyProject } from '../lib/api';
-  import { errorText, toast } from '../lib/state.svelte';
+  import { errorText, isRemote, toast } from '../lib/state.svelte';
 
   interface Props {
     /** After an import; the project list then shows what was added. */
@@ -11,6 +11,9 @@
   }
 
   let { ondone, oncancel }: Props = $props();
+
+  // A remote hub reads the 0.1 folder and the project folders on its own machine: typed, not picked here.
+  const remote = isRemote();
 
   interface Row {
     project: LegacyProject;
@@ -94,6 +97,7 @@
         label={t('import.folder')}
         bind:value={folder}
         placeholder={t('import.folderPlaceholder')}
+        hint={remote ? t('import.folderRemoteHint') : undefined}
         icon="folder"
         mono
         spellcheck={false}
@@ -102,7 +106,9 @@
         onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), scan(true))}
         onchange={() => scan()}
       />
-      <Button icon="folder-open" onclick={pickFolder} class="pick">{t('import.pick')}</Button>
+      {#if !remote}
+        <Button icon="folder-open" onclick={pickFolder} class="pick">{t('import.pick')}</Button>
+      {/if}
     </div>
   </Card>
 
@@ -144,7 +150,7 @@
                   label={t('import.root', { name: row.project.name })}
                   bind:value={row.root}
                   placeholder={t('import.rootPlaceholder')}
-                  hint={row.fromBat ? t('import.rootFromBat') : undefined}
+                  hint={row.fromBat ? t('import.rootFromBat') : remote ? t('form.folderRemoteHint') : undefined}
                   error={row.error}
                   oninput={() => ((row.fromBat = false), (row.error = undefined))}
                   icon="folder"
@@ -152,7 +158,9 @@
                   spellcheck={false}
                   class="grow"
                 />
-                <Button icon="folder-open" onclick={() => pickRoot(row)} class="pick">{t('import.pickRoot')}</Button>
+                {#if !remote}
+                  <Button icon="folder-open" onclick={() => pickRoot(row)} class="pick">{t('import.pickRoot')}</Button>
+                {/if}
               </div>
             {/if}
           </li>

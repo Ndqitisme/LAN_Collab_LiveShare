@@ -3,7 +3,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
-export type HubState = 'starting' | 'running' | 'bindError' | 'configError';
+export type HubState = 'starting' | 'running' | 'bindError' | 'configError' | 'offline';
 export type ProjectState = 'starting' | 'running' | 'disabled' | 'failed';
 
 export interface HubView {
@@ -35,6 +35,10 @@ export interface ProjectView {
 export interface Snapshot {
   hub: HubView;
   projects: ProjectView[];
+  /** The remote hub this snapshot is of; null for this machine's hub. */
+  hubId: string | null;
+  /** Why the remote hub is offline. */
+  remoteError: AppError | null;
 }
 
 export interface ProjectInput {
@@ -239,4 +243,42 @@ export const hubApi = {
   openFirewall: () => invoke<FirewallResult>('open_firewall'),
   autostart: () => invoke<boolean>('get_autostart'),
   setAutostart: (enabled: boolean) => invoke<boolean>('set_autostart', { enabled }),
+};
+
+// Remote hubs: src-tauri/src/hubs.rs and the shapes of remote.rs and admin_remote.rs.
+
+export interface RemoteView {
+  id: string;
+  label: string;
+  address: string;
+  fingerprint: string | null;
+  /** null until the app has tried to connect. */
+  online: boolean | null;
+}
+
+export interface HubsView {
+  /** null is this machine's hub. */
+  selected: string | null;
+  remotes: RemoteView[];
+}
+
+export interface Probe {
+  tls: boolean;
+  fingerprint: string | null;
+}
+
+export interface RemoteInput {
+  label: string;
+  host: string;
+  port: number;
+  token: string;
+  fingerprint: string;
+}
+
+export const hubsApi = {
+  list: () => invoke<HubsView>('list_hubs'),
+  select: (id: string | null) => invoke<Snapshot>('select_hub', { id }),
+  probe: (host: string, port: number) => invoke<Probe>('probe_remote', { host, port }),
+  add: (input: RemoteInput) => invoke<Snapshot>('add_remote', { input }),
+  remove: (id: string) => invoke<HubsView>('remove_remote', { id }),
 };

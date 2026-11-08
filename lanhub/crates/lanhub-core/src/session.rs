@@ -21,7 +21,7 @@ use crate::logs::log_in;
 use crate::project::{ActorMsg, JoinRequest, Line, ProjectInfo, line};
 use crate::router::{Router, Table};
 use crate::util::{log, now_ms, random_uuid};
-use crate::{HUB_VERSION, allow, chat, http_diag, tls};
+use crate::{HUB_VERSION, admin_server, allow, chat, http_diag, tls};
 
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(5);
@@ -265,7 +265,7 @@ pub async fn accept(mut stream: TcpStream, addr: SocketAddr, router: Arc<Router>
             return;
         };
         let (rd, wr) = stream.into_split();
-        return serve(rd, wr, prefix, addr, router, key, deadline).await;
+        return serve(rd, wr, prefix, addr, router, key, deadline, false).await;
     };
     let mut first = [0u8; 1];
     if !matches!(
@@ -317,7 +317,7 @@ pub async fn accept(mut stream: TcpStream, addr: SocketAddr, router: Arc<Router>
         return;
     };
     let (rd, wr) = tokio::io::split(stream);
-    serve(rd, wr, prefix, addr, router, key, deadline).await;
+    serve(rd, wr, prefix, addr, router, key, deadline, true).await;
 }
 
 /// Reads until the first bytes tell an HTTP request from a protocol client. An HTTP request gets the
@@ -354,6 +354,7 @@ async fn first_bytes<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve<R, W>(
     mut rd: R,
     wr: W,
@@ -362,6 +363,7 @@ async fn serve<R, W>(
     router: Arc<Router>,
     key: u64,
     deadline: Instant,
+    tls: bool,
 ) where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -405,7 +407,8 @@ async fn serve<R, W>(
             };
             &buf[..n]
         };
-        for raw in dec.push(chunk) {
+        let mut lines = dec.push(chunk).into_iter();
+        while let Some(raw) = lines.next() {
             let parsed = json::parse(&raw);
             if let Some(project) = &joined {
                 if let Some(m) = parsed.ok().filter(is_message)
@@ -421,6 +424,11 @@ async fn serve<R, W>(
             }
             // Before the hello, a line that is not JSON is skipped; anything else but a hello closes.
             let Ok(m) = parsed else { continue };
+            if is_message(&m) && m.get("t").and_then(Json::as_str) == Some("admin_hello") {
+                let rest = lines.collect();
+                return admin_server::serve(rd, dec, &raw, rest, conn, close_rx, addr, router, tls)
+                    .await;
+            }
             if !is_message(&m) || m.get("t").and_then(Json::as_str) != Some("hello") {
                 conn.close();
                 break 'conn;
