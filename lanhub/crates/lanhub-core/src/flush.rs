@@ -111,15 +111,16 @@ pub struct Io {
 }
 
 impl Io {
-    pub fn start(name: &str) -> Io {
+    pub fn start(name: &str, root: &Path) -> Io {
         let (tx, rx) = mpsc::channel::<IoJob>();
         let project = name.to_owned();
+        let root = root.to_path_buf();
         let thread = std::thread::Builder::new()
             .name(format!("lanhub-io-{name}"))
             .spawn(move || {
                 crate::logs::set_thread_project(&project);
                 for job in rx {
-                    run(job);
+                    run(job, &root);
                 }
             })
             .expect("the OS can start a thread");
@@ -153,7 +154,20 @@ impl Io {
     }
 }
 
-fn run(job: IoJob) {
+/// The protocol has no folders: a folder moved or deleted by a member arrives as one delete per file, so
+/// the folders those deletes empty go with them. `remove_dir` refuses a folder that still holds anything,
+/// which ends the walk.
+fn remove_empty_parents(root: &Path, abs: &Path) {
+    let mut dir = abs.parent();
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) || std::fs::remove_dir(d).is_err() {
+            return;
+        }
+        dir = d.parent();
+    }
+}
+
+fn run(job: IoJob, root: &Path) {
     match job {
         IoJob::FlushText { rel, abs, text } => {
             let bytes = String::from_utf16_lossy(&text).into_bytes();
@@ -169,11 +183,11 @@ fn run(job: IoJob) {
             );
         }
         IoJob::Remove { abs, done } => {
-            let _ = done.send(
-                remove_file_force(&abs)
-                    .map(|_| Vec::new())
-                    .map_err(|e| e.to_string()),
-            );
+            let r = remove_file_force(&abs);
+            if r.is_ok() {
+                remove_empty_parents(root, &abs);
+            }
+            let _ = done.send(r.map(|_| Vec::new()).map_err(|e| e.to_string()));
         }
         IoJob::Read { abs, done } => {
             let _ = done.send(std::fs::read(&abs).map_err(|e| e.to_string()));
@@ -210,6 +224,9 @@ fn run(job: IoJob) {
         IoJob::RemoveRecorded { abs, done, record } => {
             let old = std::fs::read(&abs).ok();
             let r = remove_file_force(&abs);
+            if r.is_ok() {
+                remove_empty_parents(root, &abs);
+            }
             if let (Ok(()), Some(old)) = (&r, old) {
                 record.removed(old);
             }

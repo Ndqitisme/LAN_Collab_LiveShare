@@ -336,6 +336,25 @@ test('lib/client-core.js renders catalog sentences from codes and activity kinds
   cc.disconnect();
 });
 
+test('a folder emptied by deletes is removed on the hub and on members, a folder still holding a file stays', async () => {
+  const cc = collab(open.port, 'cc-mover');
+  await until(() => cc.ready, 'client ready');
+  const raw = await join(open.port, { name: 'mover' });
+  for (const p of ['moved/sub/a.txt', 'moved/b.txt', 'kept/c.txt']) raw.send({ t: 'create', path: p, kind: 'text', text: p });
+  await until(() => fs.existsSync(path.join(cc.root, 'moved', 'sub', 'a.txt')) && fs.existsSync(path.join(cc.root, 'kept', 'c.txt')), 'files on the member');
+  fs.writeFileSync(path.join(cc.root, 'kept', 'local-only.txt'), 'not synced');
+  // A folder move reaches the others as one delete per file.
+  for (const p of ['moved/sub/a.txt', 'moved/b.txt', 'kept/c.txt']) raw.send({ t: 'delete', path: p });
+  await until(() => !fs.existsSync(path.join(cc.root, 'kept', 'c.txt')) && !fs.existsSync(path.join(cc.root, 'moved', 'b.txt')), 'deletes applied on the member');
+  for (const root of [open.root, cc.root]) {
+    await until(() => !fs.existsSync(path.join(root, 'moved')), `no empty moved folder in ${root}`);
+  }
+  assert.ok(!fs.existsSync(path.join(open.root, 'kept')), 'the hub had nothing else in kept');
+  assert.ok(fs.existsSync(path.join(cc.root, 'kept', 'local-only.txt')), 'a folder with a file left is kept');
+  raw.close();
+  cc.disconnect();
+});
+
 test('lib/client-core.js reports its RTT in presence every 5 s', async () => {
   const peer = await join(open.port, { name: 'rtt-peer' });
   const cc = collab(open.port, 'cc-rtt');

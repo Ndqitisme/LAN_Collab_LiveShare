@@ -376,7 +376,7 @@ impl Project {
             mirrored: HashSet::new(),
             edit_history: history_log,
             history_replies,
-            io: Io::start(&info.name),
+            io: Io::start(&info.name, &root),
             info,
             root,
             excluder,
